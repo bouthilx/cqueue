@@ -1,7 +1,12 @@
 CQueue
 ======
 
-Message Queue Primitives
+Message Queue Primitives.
+CQueue allows you to start the server in the same script as your worker,
+removing the need for you to deploy a server before hand.
+
+The cockroachdb backend even allows you to create a highly resilient queue
+that can survive multiple server failures.
 
 
 .. code-block::
@@ -12,8 +17,8 @@ Message Queue Primitives
 
     # -- Start a broker in the background
     broker = make_message_broker(uri)
-    # Push the necessary tables/collections
-    broker.init()
+
+    # start the server
     broker.start()
 
     # -- connect to the broker and pull/push  messages

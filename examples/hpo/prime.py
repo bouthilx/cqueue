@@ -1,8 +1,8 @@
 import time
 
 from cqueue.backends import make_message_broker, make_message_client
-from cqueue.taskmaster import WORK_QUEUE, RESULT_QUEUE
-from cqueue.taskmaster import START_BROKER, START_HPO
+from examples.hpo.taskmaster import WORK_QUEUE, RESULT_QUEUE
+from examples.hpo.taskmaster import START_BROKER, START_HPO
 
 
 class PrimeMonitor:

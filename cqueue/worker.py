@@ -1,96 +1,83 @@
-import subprocess
 import traceback
 import time
+from typing import Dict
 
-from cqueue.logs import error, info
-from cqueue.backends import make_message_broker, make_message_client
+from cqueue.logs import error, info, warning
+from cqueue.backends import make_message_client
 from cqueue.backends.queue import MessageQueue, Message
-from cqueue.taskmaster import WORK_QUEUE, RESULT_QUEUE
-from cqueue.taskmaster import WORKER_LEFT, WORKER_JOIN
-from cqueue.taskmaster import START_BROKER, START_HPO, SHUTDOWN, WORK_ITEM
-from cqueue.taskmaster import WorkScheduler
+
+WORK_QUEUE = 'work'
+RESULT_QUEUE = 'result'
+
+WORKER_JOIN = 1     # Worker joined work group
+WORK_ITEM   = 2     # Worker received work item
+RESULT_ITEM = 3     # Worker pushing results
+SHUTDOWN    = 4     # Worker should shutdown
+WORKER_LEFT = 5     # Worker left work group
 
 
-class Worker:
-    def __init__(self, queue_uri, worker_id):
+class BaseWorker:
+    def __init__(self, queue_uri, worker_id, work_queue, result_queue=None):
         self.uri = queue_uri
         self.client: MessageQueue = make_message_client(queue_uri)
         self.running = False
         self.work_id = worker_id
         self.broker = None
+        self.work_queue = work_queue
+        self.result_queue = result_queue
+        self.context = {}
+        self.dispatcher = {
+            SHUTDOWN: self.shutdown_worker
+        }
+
+    def unregistered_workitem(self, message: Message, context: Dict):
+        warning(f'{message} has no registered handlers')
+        return None
+
+    def shutdown_worker(self, message: Message, context: Dict):
+        self.running = False
+        return None
+
+    def ignore_message(self, message: Message, context: Dict):
+        pass
+
+    def new_handler(self, message_type, handler):
+        self.dispatcher[message_type] = handler
+
+    def pop_workitem(self):
+        return self.client.pop(self.work_queue)
+
+    def push_result(self, result, mtype=RESULT_ITEM):
+        return self.client.push(self.result_queue, message=result, mtype=mtype)
 
     def run(self):
         info('starting worker')
 
         self.running = True
         self.client.name = f'worker-{self.work_id}'
-        self.client.push(RESULT_QUEUE, message={'worker': '1'}, mtype=WORKER_JOIN)
+        self.client.push(self.result_queue, message={'worker': '1'}, mtype=WORKER_JOIN)
         last_message = None
 
         with self.client:
             while self.running:
                 try:
-                    workitem = self.client.pop(WORK_QUEUE)
+                    workitem = self.pop_workitem()
 
+                    # wait for more work to come through
                     if workitem is None:
                         time.sleep(0.01)
+                        continue
 
-                    elif workitem.mtype == START_BROKER:
-                        info('starting new message broker')
-                        msg = workitem.message
-                        # self.broker = make_message_broker(**msg.get('kwargs'))
-                        # self.broker.start()
+                    handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
+                    result = handler(workitem, self.context)
 
-                    elif workitem.mtype == WORK_ITEM:
-                        self.execute(workitem)
+                    if self.result_queue is not None and result is not None:
+                        self.push_result(result)
 
-                    elif workitem.mtype == SHUTDOWN:
-                        info(f'shutting down worker')
-                        self.running = False
-                        last_message = workitem
-
-                    # Shutdown worker loop and start HPO that has it's own loop
-                    elif workitem.mtype == START_HPO:
-                        info('starting HPO service')
-                        self.running = False
-                        last_message = workitem
-
-                    else:
-                        error(f'Unrecognized (message: {workitem})')
+                    self.client.mark_actioned(self.work_queue, workitem)
+                    last_message = workitem
 
                 except Exception:
                     error(traceback.format_exc())
-        # --
 
-        self.client.push(RESULT_QUEUE, message={'worker': '0'}, mtype=WORKER_LEFT)
-        if last_message:
-            self.client.mark_actioned(WORK_QUEUE, last_message)
-
-            if last_message.mtype == START_HPO:
-                info('HPO')
-                msg = last_message.message
-                hpo = WorkScheduler(**msg.get('kwargs'))
-                hpo.run()
-
-        if self.broker:
-            self.broker.stop()
-
-    def execute(self, message: Message):
-        msg = message.message
-
-        script = msg.get('script')
-        args = msg.get('args', list())
-        env = msg.get('env', dict())
-        env['MQ_CLIENT'] = self.uri
-
-        if script is None:
-            error(f'work item without script!')
-        else:
-            info(f'starting work process (cmd: {script} {" ".join(args)})')
-
-            command = [script] + args
-            process = subprocess.Popen(command, env=env)
-            return_code = process.wait()
-            info(f'finished work item (rc: {return_code})')
-
-        self.client.mark_actioned(WORK_QUEUE, uid=message.uid)
+            self.client.push(self.result_queue, message={'worker': '1'}, mtype=WORKER_LEFT)
