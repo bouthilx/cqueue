@@ -15,11 +15,6 @@ from cqueue.backends.queue import Message, MessageQueue, Agent
 
 _base = os.path.dirname(os.path.realpath(__file__))
 
-MONGODB_BIN = {
-    'posix': f'{_base}/mongo/mongo_linux',
-    'macos': f'{_base}/mongo/mongo_macos'
-}
-
 
 class MongoDB:
     def __init__(self, address, port, location, clean_on_exit=True):

@@ -24,14 +24,14 @@ COCKROACH_HASH = {
 _base = os.path.dirname(os.path.realpath(__file__))
 
 COCKROACH_BIN = {
-    'posix': f'{_base}/cockroach/cockroach_linux',
-    'macos': f'{_base}/cockroach/cockroach_macos'
+    'posix': f'{_base}/bin/cockroach'
 }
 
 
 def track_schema(clients):
     permissions = []
     for client in clients:
+        permissions.append(f'CREATE USER IF NOT EXISTS {client};')
         permissions.append(f'GRANT ALL ON DATABASE track TO {client};')
     permissions = '\n'.join(permissions)
 
@@ -87,12 +87,24 @@ def message_queue_schema(clients, name):
     actioned_time: when was the message actioned
     message      : the message
     """
+
+    sys_permissions = []
+    for client in clients:
+        sys_permissions.append(f'GRANT ALL ON DATABASE queue TO {client};')
+    sys_permissions = '\n'.join(sys_permissions)
+
     permissions = []
     for client in clients:
         permissions.append(f'GRANT ALL ON DATABASE queue_{name} TO {client};')
     permissions = '\n'.join(permissions)
 
+    user = []
+    for client in clients:
+        user.append(f'CREATE USER IF NOT EXISTS {client};')
+    user = '\n'.join(user)
+
     return f"""
+    {user}
     CREATE DATABASE IF NOT EXISTS queue_{name};
     SET DATABASE = queue_{name};
     {permissions}
@@ -107,6 +119,8 @@ def message_queue_schema(clients, name):
         message         JSONB
     );
     CREATE DATABASE IF NOT EXISTS queue;
+    SET DATABASE = queue;
+    {sys_permissions}
     CREATE TABLE IF NOT EXISTS queue.system (
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
@@ -184,6 +198,7 @@ class CockRoachDB:
             stderr=subprocess.STDOUT
         )
         self.cmd = kwargs['args']
+        debug(self.cmd)
 
         with subprocess.Popen(**kwargs, shell=True) as proc:
             try:
@@ -213,15 +228,11 @@ class CockRoachDB:
                     time.sleep(0.01)
 
             self.properties['db_pid'] = int(open(f'{self.location}/cockroach_pid', 'r').read())
-            self._setup()
+            # self._setup()
         except Exception as e:
             error(traceback.format_exc(e))
 
     def _setup(self, client='track_client'):
-        out = subprocess.check_output(
-            f'{self.bin} user set {client} --insecure --host={self.addrs}', shell=True)
-        debug(out.decode('utf8').strip())
-
         if self.schema is not None:
             if callable(self.schema):
                 self.schema = self.schema(client)
@@ -244,17 +255,12 @@ class CockRoachDB:
         clients: str
             create permission for all the clients
         """
-        # set client
-        out = subprocess.check_output(
-            f'{self.bin} user set {client} --insecure --host={self.addrs}', shell=True)
-        debug(out.decode('utf8').strip())
-
         if clients is None:
             clients = []
 
         clients.append(client)
-
         statement = message_queue_schema(clients, name)
+
         if isinstance(statement, str):
             statement = statement.encode('utf8')
 
@@ -277,6 +283,7 @@ class CockRoachDB:
 
     def __enter__(self):
         self.start()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()

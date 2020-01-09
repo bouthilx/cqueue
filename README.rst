@@ -22,3 +22,13 @@ Message Queue Primitives
     client.push('queue_name', {'my_message': 123})
 
     message = client.pop('queue_name').message
+
+Dependencies
+~~~~~~~~~~~~
+
+
+For mongodb:
+
+.. code-block::
+
+    sudo apt-get install mongodb-server
