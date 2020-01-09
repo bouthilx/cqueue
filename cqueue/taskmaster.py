@@ -78,7 +78,6 @@ class Sampler:
 
     def observe(self, p, r):
         return True
-        # return self.optimizer.observe(p, r)
 
 
 class WorkScheduler:

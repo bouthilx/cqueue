@@ -1,12 +1,9 @@
-import os
-import sys
-
-from olympus.utils import parse_uri, info
-from olympus.utils.network import get_network_interface, get_ip_address, get_free_port
+from cqueue.logs import info
+from cqueue.uri import parse_uri
 
 
 def make_cockroach_server(uri, *args, **kwargs):
-    from olympus.distributed.cockroachdb import CockRoachDB
+    from cqueue.backends.cockroachdb import CockRoachDB
     data = parse_uri(uri)
 
     return CockRoachDB(
@@ -16,27 +13,27 @@ def make_cockroach_server(uri, *args, **kwargs):
 
 
 def make_cockroach_client(uri, *args, **kwargs):
-    from olympus.distributed.cockroachdb import CKMQClient
+    from cqueue.backends.cockroachdb import CKMQClient
     return CKMQClient(uri, *args, **kwargs)
 
 
 def make_python_client(uri, *args, **kwargs):
-    from olympus.distributed.pyqueue import PythonQueue
+    from cqueue.backends.pyqueue import PythonQueue
     return PythonQueue()
 
 
 def make_python_broker(uri, *args, **kwargs):
-    from olympus.distributed.pyqueue import PythonBroker
+    from cqueue.backends.pyqueue import PythonBroker
     return PythonBroker()
 
 
 def make_mongo_client(uri, *args, **kwargs):
-    from olympus.distributed.mongo import MongoClient
+    from cqueue.backends.mongodb import MongoClient
     return MongoClient(uri)
 
 
 def make_mongo_broker(uri, *args, **kwargs):
-    from olympus.distributed.mongo import MongoDB
+    from cqueue.backends.mongodb import MongoDB
     options = parse_uri(uri)
     return MongoDB(options['address'], port=int(options['port']), location='/tmp/mongo')
 

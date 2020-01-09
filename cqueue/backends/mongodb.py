@@ -9,8 +9,9 @@ import traceback
 import threading
 
 from multiprocessing import Process, Manager
-from olympus.utils import parse_uri, info, error
-from olympus.distributed.queue import Message, MessageQueue, Agent
+from cqueue.logs import info, error
+from cqueue.uri import parse_uri
+from cqueue.backends.queue import Message, MessageQueue, Agent
 
 _base = os.path.dirname(os.path.realpath(__file__))
 

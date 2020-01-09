@@ -9,8 +9,9 @@ import traceback
 import threading
 
 from multiprocessing import Process, Manager
-from olympus.utils import parse_uri, debug, info, error
-from olympus.distributed.queue import Message, MessageQueue
+from cqueue.logs import debug, info, error
+from cqueue.uri import parse_uri
+from cqueue.backends.queue import Message, MessageQueue
 
 
 VERSION = '19.1.1'
@@ -106,7 +107,6 @@ def message_queue_schema(clients, name):
         message         JSONB
     );
     CREATE DATABASE IF NOT EXISTS queue;
-    GRANT ALL ON DATABASE queue TO {client};
     CREATE TABLE IF NOT EXISTS queue.system (
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
