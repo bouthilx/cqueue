@@ -16,7 +16,7 @@ class WorkerReceiver(BaseWorker):
 
 class ResultReceiver(BaseWorker):
     def __init__(self, uri):
-        super(ResultReceiver, self).__init__(uri, 0, RESULT_QUEUE, WORK_QUEUE)
+        super(ResultReceiver, self).__init__(uri, -1, RESULT_QUEUE, WORK_QUEUE)
         self.new_handler(WORKER_JOIN, self.worker_join)
         self.new_handler(RESULT_ITEM, self.read_results)
         self.new_handler(WORKER_LEFT, self.worker_left)

@@ -26,12 +26,13 @@ class BaseWorker:
         self.work_queue = work_queue
         self.result_queue = result_queue
         self.context = {}
+        self.client.name = f'worker-{self.work_id}'
         self.dispatcher = {
             SHUTDOWN: self.shutdown_worker
         }
 
     def unregistered_workitem(self, message: Message, context: Dict):
-        warning(f'{message} has no registered handlers')
+        warning(f'{self.client.name} {message} has no registered handlers')
         return None
 
     def shutdown_worker(self, message: Message, context: Dict):
@@ -50,11 +51,10 @@ class BaseWorker:
     def push_result(self, result, mtype=RESULT_ITEM):
         return self.client.push(self.result_queue, message=result, mtype=mtype)
 
-    def run(self):
+    def run(self, stop_when_empty=False):
         info('starting worker')
 
         self.running = True
-        self.client.name = f'worker-{self.work_id}'
         self.client.push(self.result_queue, message={'worker': '1'}, mtype=WORKER_JOIN)
         last_message = None
 
@@ -65,7 +65,10 @@ class BaseWorker:
 
                     # wait for more work to come through
                     if workitem is None:
-                        time.sleep(0.01)
+                        if stop_when_empty:
+                            return
+                        else:
+                            time.sleep(0.01)
                         continue
 
                     handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
