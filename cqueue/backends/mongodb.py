@@ -107,7 +107,8 @@ class MongoDB:
             ('time', pymongo.DESCENDING),
             ('mtype', pymongo.DESCENDING),
             ('read', pymongo.DESCENDING),
-            ('actioned', pymongo.DESCENDING)
+            ('actioned', pymongo.DESCENDING),
+            ('replied_id', pymongo.DESCENDING)
         ])
 
     def stop(self):
@@ -226,7 +227,7 @@ class MongoClient(MessageQueue):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         self.message_handlers[mtype] = handler
 
-    def enqueue(self, name, message, mtype=0):
+    def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         return self.client.queues[name].insert_one({
             'time': datetime.datetime.utcnow(),
@@ -235,7 +236,8 @@ class MongoClient(MessageQueue):
             'read_time': None,
             'actioned': False,
             'actioned_time': None,
-            'message': message
+            'replying_to': replying_to,
+            'message': message,
         }).inserted_id
 
     def _parse(self, result):
@@ -252,8 +254,15 @@ class MongoClient(MessageQueue):
             result['read_time'],
             result['actioned'],
             result['actioned_time'],
+            result['replying_to'],
             parser(result['message']),
         )
+
+    def get_reply(self, name, uid):
+        msg = self.client.queues[name].find_one(
+            {'replying_to': uid},
+        )
+        return self._parse(msg)
 
     def get_unactioned(self, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""

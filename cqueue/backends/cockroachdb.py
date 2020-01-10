@@ -116,6 +116,7 @@ def message_queue_schema(clients, name):
         read_time       TIMESTAMP,
         actioned        BOOLEAN,
         actioned_time   TIMESTAMP,
+        replying_to     INTEGER,
         message         JSONB
     );
     CREATE DATABASE IF NOT EXISTS queue;
@@ -132,7 +133,8 @@ def message_queue_schema(clients, name):
         read        DESC, 
         time        DESC,
         actioned    DESC,
-        mtype       ASC
+        mtype       ASC,
+        replying_to DESC
     );
     """
 
@@ -431,15 +433,15 @@ class CKMQClient(MessageQueue):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         self.message_handlers[mtype] = handler
 
-    def enqueue(self, name, message, mtype=0):
+    def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         self.cursor.execute(f"""
         INSERT INTO  
-            queue_{name}.messages (mtype, read, actioned, message)
+            queue_{name}.messages (mtype, read, actioned, message, replying_to)
         VALUES
-            (%s, %s, %s, %s)
+            (%s, %s, %s, %s, %s)
         RETURNING uid
-        """, (mtype, False, False, json.dumps(message)))
+        """, (mtype, False, False, json.dumps(message), replying_to))
 
         return self.cursor.fetchone()[0]
 
@@ -457,7 +459,8 @@ class CKMQClient(MessageQueue):
             result[4],
             result[5],
             result[6],
-            parser(result[7]),
+            result[7],
+            parser(result[8]),
         )
 
     def get_unactioned(self, name):
@@ -493,6 +496,19 @@ class CKMQClient(MessageQueue):
         LIMIT 1
         RETURNING *
         """)
+
+        return self._parse(self.cursor.fetchone())
+
+    def get_reply(self, name, uid):
+        """Get the replied message from the queue"""
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            queue_{name}.messages
+        WHERE 
+            replying_to = %s
+        """, (uid,))
 
         return self._parse(self.cursor.fetchone())
 

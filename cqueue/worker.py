@@ -48,8 +48,8 @@ class BaseWorker:
     def pop_workitem(self):
         return self.client.pop(self.work_queue)
 
-    def push_result(self, result, mtype=RESULT_ITEM):
-        return self.client.push(self.result_queue, message=result, mtype=mtype)
+    def push_result(self, result, mtype=RESULT_ITEM, replying_to=None):
+        return self.client.push(self.result_queue, message=result, mtype=mtype, replying_to=replying_to)
 
     def run(self, stop_when_empty=False):
         info('starting worker')
@@ -75,7 +75,7 @@ class BaseWorker:
                     result = handler(workitem, self.context)
 
                     if self.result_queue is not None and result is not None:
-                        self.push_result(result)
+                        self.push_result(result, replying_to=workitem.uid)
 
                     self.client.mark_actioned(self.work_queue, workitem)
                     last_message = workitem

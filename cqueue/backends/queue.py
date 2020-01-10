@@ -19,6 +19,7 @@ class Message:
     read_time: datetime
     actioned: bool
     actioned_time: datetime
+    replying_to: int
     message: str
 
     def __repr__(self):
@@ -41,7 +42,7 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def enqueue(self, name, message, mtype=0):
+    def enqueue(self, name, message, mtype=0, replying_to=None):
         """Insert a new message inside the queue
 
         Parameters
@@ -55,6 +56,8 @@ class MessageQueue:
         mtype: int
             message type
 
+        replying_to: int
+            message id this message replies to
         """
         raise NotImplementedError()
 
@@ -96,8 +99,21 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def push(self, name, message, mtype=0):
-        return self.enqueue(name, message, mtype)
+    def get_reply(self, name, uid):
+        """Fetch the reply to a message
+
+        Parameters
+        ----------
+        name: str
+            Message queue namespace
+
+        uid: Optional[int]
+            uid of the message we want the response of
+        """
+        raise NotImplementedError()
+
+    def push(self, name, message, mtype=0, replying_to=None):
+        return self.enqueue(name, message, mtype, replying_to)
 
     def pop(self, name):
         return self.dequeue(name)
