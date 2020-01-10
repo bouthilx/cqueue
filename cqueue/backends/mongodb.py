@@ -236,7 +236,7 @@ class MongoClient(MessageQueue):
             'actioned': False,
             'actioned_time': None,
             'message': message
-        })
+        }).inserted_id
 
     def _parse(self, result):
         if result is None:

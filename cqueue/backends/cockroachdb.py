@@ -438,7 +438,10 @@ class CKMQClient(MessageQueue):
             queue_{name}.messages (mtype, read, actioned, message)
         VALUES
             (%s, %s, %s, %s)
+        RETURNING uid
         """, (mtype, False, False, json.dumps(message)))
+
+        return self.cursor.fetchone()[0]
 
     def _parse(self, result):
         if result is None:
