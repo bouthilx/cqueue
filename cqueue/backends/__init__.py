@@ -38,6 +38,15 @@ def make_mongo_broker(uri, *args, **kwargs):
     return MongoDB(options['address'], port=int(options['port']), location='/tmp/mongo')
 
 
+def make_cockroach_monitor(uri, *args, **kwargs):
+    from cqueue.backends.cockroachdb import CKQueueMonitor
+    return CKQueueMonitor(uri, *args, **kwargs)
+
+def make_mongo_monitor(uri, *args, **kwargs):
+    from cqueue.backends.mongodb import MongoQueueMonitor
+    return MongoQueueMonitor(uri)
+
+
 client_factory = {
     'cockroach': make_cockroach_client,
     'python': make_python_client,
@@ -50,6 +59,11 @@ broker_factory = {
     'mongodb': make_mongo_broker
 }
 
+monitor_factory = {
+    'cockroach': make_cockroach_monitor,
+    'mongodb': make_mongo_monitor
+}
+
 
 def make_message_broker(uri, *args, **kwargs):
     options = parse_uri(uri)
@@ -59,6 +73,11 @@ def make_message_broker(uri, *args, **kwargs):
 def make_message_client(uri, *args, **kwargs):
     options = parse_uri(uri)
     return client_factory.get(options.get('scheme'))(uri, *args, **kwargs)
+
+
+def make_message_monitor(uri, *args, **kwargs):
+    options = parse_uri(uri)
+    return monitor_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 
 
 def get_main_script():

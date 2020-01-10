@@ -132,3 +132,15 @@ class MessageQueue:
 
     def reset_queue(self, name):
         raise NotImplementedError()
+
+
+class QueueMonitor:
+    def get_all_messages(self, name, limit=100):
+        raise NotImplementedError()
+
+    def get_unread_messages(self, name):
+        raise NotImplementedError()
+
+    def get_unactioned_messages(self, name):
+        raise NotImplementedError()
+

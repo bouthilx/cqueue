@@ -11,7 +11,7 @@ import threading
 from multiprocessing import Process, Manager
 from cqueue.logs import debug, info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue
+from cqueue.backends.queue import Message, MessageQueue, QueueMonitor
 
 
 VERSION = '19.1.1'
@@ -595,3 +595,79 @@ class CKMQClient(MessageQueue):
             records.append(self._parse(row))
 
         return records
+
+
+class CKQueueMonitor(QueueMonitor):
+    def __init__(self, uri):
+        uri = parse_uri(uri)
+
+        self.con = psycopg2.connect(
+            user=uri.get('username', 'default_user'),
+            password=uri.get('password', 'mq_password'),
+            # sslmode='require',
+            # sslrootcert='certs/ca.crt',
+            # sslkey='certs/client.maxroach.key',
+            # sslcert='certs/client.maxroach.crt',
+            port=uri['port'],
+            host=uri['address']
+        )
+        self.con.set_session(autocommit=True)
+        self.cursor = self.con.cursor()
+
+    def _parse(self, result):
+        if result is None:
+            return None
+
+        mtype = result[2]
+        return Message(
+            result[0],
+            result[1],
+            mtype,
+            result[3],
+            result[4],
+            result[5],
+            result[6],
+            result[7],
+            result[8],
+        )
+
+    def _fetch_all(self):
+        rows = self.cursor.fetchall()
+        records = []
+        for row in rows:
+            records.append(self._parse(row))
+
+        return records
+
+    def get_all_messages(self, name, limit=100):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            queue_{name}.messages
+        LIMIT {limit}
+        """)
+        return self._fetch_all()
+
+    def get_unread_messages(self, name):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            queue_{name}.messages
+        WHERE 
+            read = false
+        """)
+        return self._fetch_all()
+
+    def get_unactioned_messages(self, name):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            queue_{name}.messages
+        WHERE 
+            read = true        AND
+            actioned = false
+        """)
+        return self._fetch_all()

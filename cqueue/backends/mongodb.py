@@ -11,7 +11,7 @@ import threading
 from multiprocessing import Process, Manager
 from cqueue.logs import info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, Agent
+from cqueue.backends.queue import Message, MessageQueue, Agent, QueueMonitor
 
 _base = os.path.dirname(os.path.realpath(__file__))
 
@@ -364,3 +364,38 @@ def start_mongod():
     server = MongoDB(args.address, args.port, args.loc, False)
 
     server.start()
+
+
+class MongoQueueMonitor(QueueMonitor):
+    def __init__(self, uri):
+        uri = parse_uri(uri)
+        self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+
+    def _parse(self, result):
+        if result is None:
+            return None
+
+        mtype = result['mtype']
+        return Message(
+            result['_id'],
+            result['time'],
+            mtype,
+            result['read'],
+            result['read_time'],
+            result['actioned'],
+            result['actioned_time'],
+            result['replying_to'],
+            result['message'],
+        )
+
+    def get_all_messages(self, name, limit=100):
+        return [
+            self._parse(msg) for msg in self.client.queues[name].find({})]
+
+    def get_unread_messages(self, name):
+        return [
+            self._parse(msg) for msg in self.client.queues[name].find({'read': False})]
+
+    def get_unactioned_messages(self, name):
+        return [
+            self._parse(msg) for msg in self.client.queues[name].find({'actioned': False, 'read': True})]
