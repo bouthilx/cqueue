@@ -96,12 +96,12 @@ class MongoDB:
     def _setup(self, client='track_client'):
         pass
 
-    def new_queue(self, name, client='default_user', clients=None):
+    def new_queue(self, namespace, name, client='default_user', clients=None):
         client = pymongo.MongoClient(
             host=self.address,
             port=self.port)
 
-        queues = client.queues
+        queues = client[namespace]
         queue = queues[name]
         queue.create_index([
             ('time', pymongo.DESCENDING),
@@ -110,6 +110,11 @@ class MongoDB:
             ('actioned', pymongo.DESCENDING),
             ('replied_id', pymongo.DESCENDING)
         ])
+
+        client.qsystem.namespaces.insert_one({
+            'namespace': namespace,
+            'name': name
+        })
 
     def stop(self):
         self.properties['running'] = False
@@ -148,8 +153,9 @@ def start_message_queue(location, addrs, join=None, clean_on_exit=True):
 
 
 class AgentMonitor(threading.Thread):
-    def __init__(self, agent, wait_time=60):
+    def __init__(self, agent, namespace, wait_time=60):
         threading.Thread.__init__(self)
+        self.namespace = namespace
         self.stopped = threading.Event()
         self.wait_time = wait_time
         self.agent = agent
@@ -166,12 +172,29 @@ class AgentMonitor(threading.Thread):
             self.update_heartbeat()
 
     def update_heartbeat(self):
-        self.client.queues.system.update_one(
+        self.client[self.namespace].system.update_one(
             {'_id': self.agent.agent_id},
             {'$set': {
                 'heartbeat': datetime.datetime.utcnow()
                 }
             })
+
+
+def _parse(result):
+    if result is None:
+        return None
+
+    return Message(
+        result['_id'],
+        result['time'],
+        result['mtype'],
+        result['read'],
+        result['read_time'],
+        result['actioned'],
+        result['actioned_time'],
+        result['replying_to'],
+        result['message'],
+    )
 
 
 class MongoClient(MessageQueue):
@@ -183,14 +206,12 @@ class MongoClient(MessageQueue):
         mongodb://192.168.0.10:8123
     """
 
-    def __init__(self, uri, name='worker'):
+    def __init__(self, uri, namespace, name='worker'):
         uri = parse_uri(uri)
         self.name = name
+        self.namespace = namespace
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
-        self.heartbeat_monitor = AgentMonitor(self, wait_time=60)
-        self.message_handlers = {
-            0: self.no_handler
-        }
+        self.heartbeat_monitor = AgentMonitor(self, namespace, wait_time=60)
 
     def __enter__(self):
         self.agent_id = self._register_agent(self.name)
@@ -202,7 +223,7 @@ class MongoClient(MessageQueue):
         self._remove()
 
     def _register_agent(self, agent_name):
-        rc = self.client.queues.system.insert_one(
+        rc = self.client[self.namespace].system.insert_one(
             {
                 'time': datetime.datetime.utcnow(),
                 'agent': agent_name,
@@ -212,24 +233,16 @@ class MongoClient(MessageQueue):
         return rc
 
     def _update_heartbeat(self):
-        return self.client.update_one({'_id': self.agent_id}, {
+        return self.client[self.namespace].update_one({'_id': self.agent_id}, {
             'heartbeat': datetime.datetime.utcnow()
         })
 
     def _remove(self):
-        self.client.queues.system.remove({'_id': self.agent_id})
-
-    @staticmethod
-    def no_handler(msg):
-        return msg
-
-    def add_handler(self, mtype, handler):
-        """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        self.message_handlers[mtype] = handler
+        self.client[self.namespace].system.remove({'_id': self.agent_id})
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        return self.client.queues[name].insert_one({
+        return self.client[self.namespace][name].insert_one({
             'time': datetime.datetime.utcnow(),
             'mtype': mtype,
             'read': False,
@@ -240,56 +253,27 @@ class MongoClient(MessageQueue):
             'message': message,
         }).inserted_id
 
-    def _parse(self, result):
-        if result is None:
-            return None
-
-        mtype = result['mtype']
-        parser = self.message_handlers.get(mtype, self.no_handler)
-        return Message(
-            result['_id'],
-            result['time'],
-            mtype,
-            result['read'],
-            result['read_time'],
-            result['actioned'],
-            result['actioned_time'],
-            result['replying_to'],
-            parser(result['message']),
-        )
-
     def get_reply(self, name, uid):
-        msg = self.client.queues[name].find_one(
-            {'replying_to': uid},
-        )
-        return self._parse(msg)
-
-    def get_unactioned(self, name):
-        """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        return [self._parse(msg) for msg in self.client.queues[name].find({'actioned': False})]
-
-    def dump(self, name):
-        rows = self.client.queues[name].find()
-        for row in rows:
-            print(self._parse(row))
+        return MongoQueueMonitor(
+            cursor=self.client).get_reply(self.namespace, name, uid)
 
     def dequeue(self, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        msg = self.client.queues[name].find_one_and_update(
+        msg = self.client[self.namespace][name].find_one_and_update(
             {'read': False},
             {'$set': {
                 'read': True, 'read_time': datetime.datetime.utcnow()}
             },
             return_document=pymongo.ReturnDocument.AFTER
         )
-        return self._parse(msg)
+        return _parse(msg)
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         if isinstance(message, Message):
             uid = message.uid
 
-        msg = self.client.queues[name].find_one_and_update(
+        msg = self.client[self.namespace][name].find_one_and_update(
             {'_id': uid},
             {'$set': {
                 'actioned': True,
@@ -298,56 +282,7 @@ class MongoClient(MessageQueue):
             return_document=pymongo.ReturnDocument.AFTER
         )
 
-        return self._parse(msg)
-
-    def unread_count(self, name):
-        return self.client.queues[name].count({'read': False})
-
-    def unactioned_count(self, name):
-        return self.client.queues[name].count({'actioned': False})
-
-    def read_count(self, name):
-        return self.client.queues[name].count({'read': True})
-
-    def actioned_count(self, name):
-        return self.client.queues[name].count({'actioned': True})
-
-    def agent_count(self):
-        return self.client.queues.system.count()
-
-    def agents(self):
-        agents = self.client.queues.system.find()
-        results = []
-
-        for agent in agents:
-            agent['uid'] = agent['_id']
-            agent.pop('_id')
-
-            results.append(Agent(**agent))
-
-        return results
-
-    def reset_queue(self, name):
-        """Resume queue from previous statement
-
-        Returns
-        --------
-        returns all the restored messages
-
-        """
-
-        msgs = self.client.queues[name].find({'actioned': False, 'read':  True})
-        rc = self.client.queues[name].update(
-            {'actioned': False},
-            {'$set': {
-                'read': False, 'read_time': None}
-            }
-        )
-
-        items = []
-        for msg in msgs:
-            items.append(self._parse(msg))
-        return items
+        return _parse(msg)
 
 
 def start_mongod():
@@ -367,35 +302,91 @@ def start_mongod():
 
 
 class MongoQueueMonitor(QueueMonitor):
-    def __init__(self, uri):
-        uri = parse_uri(uri)
-        self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+    def __init__(self, uri=None, cursor=None):
+        if cursor is None:
+            uri = parse_uri(uri)
+            self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+        else:
+            self.client = cursor
 
-    def _parse(self, result):
-        if result is None:
-            return None
+    def get_namespaces(self):
+        return [(n['namespace'], n['name']) for n in self.client.qsystem.namespaces.find({})]
 
-        mtype = result['mtype']
-        return Message(
-            result['_id'],
-            result['time'],
-            mtype,
-            result['read'],
-            result['read_time'],
-            result['actioned'],
-            result['actioned_time'],
-            result['replying_to'],
-            result['message'],
+
+    def get_reply(self, namespace, name, uid):
+        msg = self.client[namespace][name].find_one(
+            {'replying_to': uid},
+        )
+        return _parse(msg)
+
+    def get_all_messages(self, namespace, name, limit=100):
+        return [
+            _parse(msg) for msg in self.client[namespace][name].find({})]
+
+    def get_unread_messages(self, namespace, name):
+        return [
+            _parse(msg) for msg in self.client[namespace][name].find({'read': False})]
+
+    def get_unactioned_messages(self, namespace, name):
+        return [
+            _parse(msg) for msg in self.client[namespace][name].find({'actioned': False, 'read': True})]
+
+    def unread_count(self, namespace, name):
+        return self.client[namespace][name].count({'read': False})
+
+    def unactioned_count(self, namespace, name):
+        return self.client[namespace][name].count({'actioned': False})
+
+    def read_count(self, namespace, name):
+        return self.client[namespace][name].count({'read': True})
+
+    def actioned_count(self, namespace, name):
+        return self.client[namespace][name].count({'actioned': True})
+
+    def agent_count(self, namespace):
+        return self.client[namespace].system.count()
+
+    def agents(self, namespace):
+        agents = self.client[namespace].system.find()
+        results = []
+
+        for agent in agents:
+            agent['uid'] = agent['_id']
+            agent.pop('_id')
+
+            results.append(Agent(**agent))
+
+        return results
+
+    def reset_queue(self, namespace, name):
+        """Resume queue from previous statement
+
+        Returns
+        --------
+        returns all the restored messages
+
+        """
+
+        msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
+        rc = self.client[namespace][name].update(
+            {'actioned': False},
+            {'$set': {
+                'read': False, 'read_time': None}
+            }
         )
 
-    def get_all_messages(self, name, limit=100):
-        return [
-            self._parse(msg) for msg in self.client.queues[name].find({})]
+        items = []
+        for msg in msgs:
+            items.append(_parse(msg))
 
-    def get_unread_messages(self, name):
-        return [
-            self._parse(msg) for msg in self.client.queues[name].find({'read': False})]
+        return items
 
-    def get_unactioned_messages(self, name):
-        return [
-            self._parse(msg) for msg in self.client.queues[name].find({'actioned': False, 'read': True})]
+
+    def get_unactioned(self, namespace, name):
+        """See `~mlbaselines.distributed.queue.MessageQueue`"""
+        return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
+
+    def dump(self, namespace, name):
+        rows = self.client[namespace][name].find()
+        for row in rows:
+            print(_parse(row))

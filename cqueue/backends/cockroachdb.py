@@ -76,7 +76,7 @@ def track_schema(clients):
     );""".encode('utf8')
 
 
-def message_queue_schema(clients, name):
+def message_queue_schema(clients, namespace, name):
     """Create a message queue table
 
     uid          : message uid to update messages
@@ -87,28 +87,29 @@ def message_queue_schema(clients, name):
     actioned_time: when was the message actioned
     message      : the message
     """
-
-    sys_permissions = []
-    for client in clients:
-        sys_permissions.append(f'GRANT ALL ON DATABASE queue TO {client};')
-    sys_permissions = '\n'.join(sys_permissions)
-
-    permissions = []
-    for client in clients:
-        permissions.append(f'GRANT ALL ON DATABASE queue_{name} TO {client};')
-    permissions = '\n'.join(permissions)
+    assert name != 'system', 'system name is reserved'
 
     user = []
     for client in clients:
         user.append(f'CREATE USER IF NOT EXISTS {client};')
     user = '\n'.join(user)
 
+    permissions = []
+    for client in clients:
+        permissions.append(f'GRANT ALL ON DATABASE {namespace} TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {namespace}.{name} TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {namespace}.system TO {client};')
+        permissions.append(f'GRANT ALL ON DATABASE archive TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE archive.messages TO {client};')
+        permissions.append(f'GRANT ALL ON DATABASE qsystem TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE qsystem.namespaces TO {client};')
+    permissions = '\n'.join(permissions)
+
     return f"""
     {user}
-    CREATE DATABASE IF NOT EXISTS queue_{name};
-    SET DATABASE = queue_{name};
-    {permissions}
-    CREATE TABLE IF NOT EXISTS queue_{name}.messages (
+    CREATE DATABASE IF NOT EXISTS {namespace};
+    SET DATABASE = {namespace};
+    CREATE TABLE IF NOT EXISTS {namespace}.{name} (
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
         mtype           INT,
@@ -119,23 +120,54 @@ def message_queue_schema(clients, name):
         replying_to     INTEGER,
         message         JSONB
     );
-    CREATE DATABASE IF NOT EXISTS queue;
-    SET DATABASE = queue;
-    {sys_permissions}
-    CREATE TABLE IF NOT EXISTS queue.system (
+    CREATE TABLE IF NOT EXISTS {namespace}.system (
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
         agent           JSONB,
         heartbeat       TIMESTAMP   DEFAULT current_timestamp()
     );
+
+    CREATE DATABASE IF NOT EXISTS qsystem;
+    CREATE TABLE IF NOT EXISTS qsystem.namespaces (
+        namespace       character(64),
+        name            character(64)
+    );
+
     CREATE INDEX IF NOT EXISTS messages_index
-    ON queue_{name}.messages  (
+    ON {namespace}.{name}  (
         read        DESC, 
         time        DESC,
         actioned    DESC,
         mtype       ASC,
         replying_to DESC
     );
+
+    CREATE DATABASE IF NOT EXISTS archive;
+    SET DATABASE = archive;
+    CREATE TABLE IF NOT EXISTS archive.messages (
+        namespace       character(64),
+        name            character(64),
+        uid             INTEGER,
+        time            TIMESTAMP   DEFAULT current_timestamp(),
+        mtype           INT,
+        read            BOOLEAN,
+        read_time       TIMESTAMP,
+        actioned        BOOLEAN,
+        actioned_time   TIMESTAMP,
+        replying_to     INTEGER,
+        message         JSONB
+    );
+    CREATE INDEX IF NOT EXISTS archive_messages_index
+    ON archive.messages  (
+        namespace   DESC,
+        name        DESC,
+        read        DESC, 
+        time        DESC,
+        actioned    DESC,
+        mtype       ASC,
+        replying_to DESC
+    );
+    {permissions}
     """
 
 
@@ -243,7 +275,7 @@ class CockRoachDB:
                 f'{self.bin} sql --insecure --host={self.addrs}', input=self.schema, shell=True)
             debug(out.decode('utf8').strip())
 
-    def new_queue(self, name, client='default_user', clients=None):
+    def new_queue(self, namespace, name, client='default_user', clients=None):
         """Create a new queue
 
         Parameters
@@ -261,7 +293,7 @@ class CockRoachDB:
             clients = []
 
         clients.append(client)
-        statement = message_queue_schema(clients, name)
+        statement = message_queue_schema(clients, namespace, name)
 
         if isinstance(statement, str):
             statement = statement.encode('utf8')
@@ -269,6 +301,12 @@ class CockRoachDB:
         out = subprocess.check_output(
             f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
         debug(out.decode('utf8').strip())
+
+        statement = f"""INSERT INTO qsystem.namespaces(namespace, name) VALUES ('{namespace}', '{name}');""".encode('utf8')
+        out = subprocess.check_output(
+            f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
+        debug(out.decode('utf8').strip())
+
 
     def stop(self):
         self.properties['running'] = False
@@ -336,12 +374,13 @@ def start_message_queue(name, location, addrs, join=None, clean_on_exit=True):
 
 
 class AgentMonitor(threading.Thread):
-    def __init__(self, agent, wait_time=60):
+    def __init__(self, agent, namespace, wait_time=60):
         threading.Thread.__init__(self)
         self.stopped = threading.Event()
         self.wait_time = wait_time
         self.agent = agent
         self.cursor = agent.cursor
+        self.namespace = namespace
 
     def stop(self):
         """Stop monitoring."""
@@ -356,12 +395,29 @@ class AgentMonitor(threading.Thread):
     def update_heartbeat(self):
         self.cursor.execute(f"""
         UPDATE 
-            queue.system
+            {self.namespace}.system
         SET 
             heartbeat = current_timestamp()
         WHERE
             uid = %s
         """, (self.agent.agent_id,))
+
+
+def _parse(result):
+    if result is None:
+        return None
+
+    return Message(
+        result[0],
+        result[1],
+        result[2],
+        result[3],
+        result[4],
+        result[5],
+        result[6],
+        result[7],
+        result[8],
+    )
 
 
 class CKMQClient(MessageQueue):
@@ -373,7 +429,7 @@ class CKMQClient(MessageQueue):
         cockroach://192.168.0.10:8123
     """
 
-    def __init__(self, uri, name=None):
+    def __init__(self, uri, namespace, name=None):
         uri = parse_uri(uri)
 
         self.con = psycopg2.connect(
@@ -390,10 +446,8 @@ class CKMQClient(MessageQueue):
         self.cursor = self.con.cursor()
         self.name = name
         self.agent_id = None
-        self.heartbeat_monitor = AgentMonitor(self, wait_time=60)
-        self.message_handlers = {
-            0: self.no_handler
-        }
+        self.namespace = namespace
+        self.heartbeat_monitor = AgentMonitor(self, namespace, wait_time=60)
 
     def __enter__(self):
         self.agent_id = self._register_agent(self.name)
@@ -407,7 +461,7 @@ class CKMQClient(MessageQueue):
     def _register_agent(self, agent_name):
         self.cursor.execute(f"""
         INSERT INTO
-            queue.system (agent)
+            {self.namespace}.system (agent)
         VALUES
             (%s)
         RETURNING uid
@@ -416,28 +470,20 @@ class CKMQClient(MessageQueue):
 
     def _update_heartbeat(self):
         self.cursor.execute(f"""
-        UPDATE queue.system SET
+        UPDATE {self.namespace}.qsystem SET
             heartbeat = current_timestamp()
         WHERE
             uid = %s
         """, (self.agent_id,))
 
     def _remove(self):
-        self.cursor.execute(f'DELETE FROM queue.system WHERE uid = %s', (self.agent_id,))
-
-    @staticmethod
-    def no_handler(msg):
-        return msg
-
-    def add_handler(self, mtype, handler):
-        """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        self.message_handlers[mtype] = handler
+        self.cursor.execute(f'DELETE FROM {self.namespace}.system WHERE uid = %s', (self.agent_id,))
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         self.cursor.execute(f"""
         INSERT INTO  
-            queue_{name}.messages (mtype, read, actioned, message, replying_to)
+            {self.namespace}.{name} (mtype, read, actioned, message, replying_to)
         VALUES
             (%s, %s, %s, %s, %s)
         RETURNING uid
@@ -445,49 +491,11 @@ class CKMQClient(MessageQueue):
 
         return self.cursor.fetchone()[0]
 
-    def _parse(self, result):
-        if result is None:
-            return None
-
-        mtype = result[2]
-        parser = self.message_handlers.get(mtype, self.no_handler)
-        return Message(
-            result[0],
-            result[1],
-            mtype,
-            result[3],
-            result[4],
-            result[5],
-            result[6],
-            result[7],
-            parser(result[8]),
-        )
-
-    def get_unactioned(self, name):
-        """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            queue_{name}.messages 
-        WHERE
-            actioned = false
-        """)
-        rows = self.cursor.fetchall()
-        return [self._parse(r) for r in rows]
-
-    def dump(self, name):
-        self.cursor.execute(f'SELECT *  FROM queue_{name}.messages')
-
-        rows = self.cursor.fetchall()
-        for row in rows:
-            print(self._parse(row))
-
     def dequeue(self, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
 
         self.cursor.execute(f"""
-        UPDATE queue_{name}.messages SET 
+        UPDATE {self.namespace}.{name} SET 
             (read, read_time) = (true, current_timestamp())
         WHERE 
             read = false
@@ -497,20 +505,7 @@ class CKMQClient(MessageQueue):
         RETURNING *
         """)
 
-        return self._parse(self.cursor.fetchone())
-
-    def get_reply(self, name, uid):
-        """Get the replied message from the queue"""
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            queue_{name}.messages
-        WHERE 
-            replying_to = %s
-        """, (uid,))
-
-        return self._parse(self.cursor.fetchone())
+        return _parse(self.cursor.fetchone())
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -519,60 +514,169 @@ class CKMQClient(MessageQueue):
             uid = message.uid
 
         self.cursor.execute(f"""
-        UPDATE queue_{name}.messages SET 
+        UPDATE {self.namespace}.{name} SET 
             (actioned, actioned_time) = (true, current_timestamp())
         WHERE 
             uid = %s
         RETURNING *
-        """, (uid, ))
+        """, (uid,))
 
-        return self._parse(self.cursor.fetchone())
+        return _parse(self.cursor.fetchone())
 
-    def unread_count(self, name):
+    def get_reply(self, name, uid):
+        return CKQueueMonitor(
+            cursor=self.cursor).get_reply(self.namespace, name, uid)
+
+
+class CKQueueMonitor(QueueMonitor):
+    def __init__(self, uri=None, cursor=None):
+        if cursor is None:
+            uri = parse_uri(uri)
+            self.con = psycopg2.connect(
+                user=uri.get('username', 'default_user'),
+                password=uri.get('password', 'mq_password'),
+                # sslmode='require',
+                # sslrootcert='certs/ca.crt',
+                # sslkey='certs/client.maxroach.key',
+                # sslcert='certs/client.maxroach.crt',
+                port=uri['port'],
+                host=uri['address']
+            )
+            self.con.set_session(autocommit=True)
+            self.cursor = self.con.cursor()
+        else:
+            self.cursor = cursor
+
+    def _fetch_all(self):
+        rows = self.cursor.fetchall()
+        records = []
+        for row in rows:
+            records.append(_parse(row))
+
+        return records
+
+    def dump(self, namespace, name):
+        self.cursor.execute(f'SELECT *  FROM {namespace}.{name}')
+
+        rows = self.cursor.fetchall()
+        for row in rows:
+            print(_parse(row))
+
+    def get_namespaces(self):
+        self.cursor.execute(f"""
+        SELECT
+            *
+        FROM qsystem.namespaces;
+        """)
+
+        return [(n[0], n[1]) for n in self.cursor.fetchall()]
+
+    def archive_namespace(self, namespace):
+        # TODO create partition per namespace
+        self.cursor.execute(f"""
+        SELECT 
+          tablename as table 
+        FROM 
+          pg_tables  
+        WHERE schemaname = '{namespace}'
+        """)
+
+        names = [n for n in self.cursor.fetchall()]
+        for table in names:
+            if table == 'system':
+                continue
+
+            self.cursor.execute(f"""
+            INSERT INTO archive.messages
+                SELECT
+                    {namespace},
+                    {table},
+                    *
+                FROM {namespace}.{table};
+            """)
+
+        self.cursor.execute(f"""
+        DROP DATABASE IF EXISTS {namespace}
+        """)
+
+    def get_all_messages(self, namespace, name, limit=100):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            {namespace}.{name}
+        LIMIT {limit}
+        """)
+        return self._fetch_all()
+
+    def get_unread_messages(self, namespace, name):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            {namespace}.{name}
+        WHERE 
+            read = false
+        """)
+        return self._fetch_all()
+
+    def get_unactioned_messages(self, namespace, name):
+        self.cursor.execute(f"""
+        SELECT 
+            * 
+        FROM 
+            {namespace}.{name}
+        WHERE 
+            read = true        AND
+            actioned = false
+        """)
+        return self._fetch_all()
+
+    def unread_count(self, namespace, name):
         self.cursor.execute(f"""
         SELECT 
             COUNT(*)
         FROM 
-            queue_{name}.messages
+            {namespace}.{name}
         WHERE 
             read = false
         """)
         return self.cursor.fetchone()[0]
 
-    def unactioned_count(self, name):
+    def unactioned_count(self, namespace, name):
         self.cursor.execute(f"""
         SELECT 
             COUNT(*)
         FROM 
-            queue_{name}.messages
+            {namespace}.{name}
         WHERE 
             actioned = false
         """)
         return self.cursor.fetchone()[0]
 
-    def read_count(self, name):
+    def read_count(self, namespace, name):
         self.cursor.execute(f"""
         SELECT 
             COUNT(*)
         FROM 
-            queue_{name}.messages
+            {namespace}.{name}
         WHERE 
             read = true
         """)
         return self.cursor.fetchone()[0]
 
-    def actioned_count(self, name):
+    def actioned_count(self, namespace, name):
         self.cursor.execute(f"""
         SELECT 
             COUNT(*)
         FROM 
-            queue_{name}.messages
+            {namespace}.{name}
         WHERE 
             actioned = true
         """)
         return self.cursor.fetchone()[0]
 
-    def reset_queue(self, name):
+    def reset_queue(self, namespace, name):
         """Resume queue from previous statement
 
         Returns
@@ -581,7 +685,7 @@ class CKMQClient(MessageQueue):
 
         """
         self.cursor.execute(f"""
-        UPDATE queue_{name}.messages 
+        UPDATE {namespace}.{name}
             SET 
                 (read, read_time) = (false, null)
             WHERE 
@@ -592,82 +696,19 @@ class CKMQClient(MessageQueue):
         rows = self.cursor.fetchall()
         records = []
         for row in rows:
-            records.append(self._parse(row))
+            records.append(_parse(row))
 
         return records
 
-
-class CKQueueMonitor(QueueMonitor):
-    def __init__(self, uri):
-        uri = parse_uri(uri)
-
-        self.con = psycopg2.connect(
-            user=uri.get('username', 'default_user'),
-            password=uri.get('password', 'mq_password'),
-            # sslmode='require',
-            # sslrootcert='certs/ca.crt',
-            # sslkey='certs/client.maxroach.key',
-            # sslcert='certs/client.maxroach.crt',
-            port=uri['port'],
-            host=uri['address']
-        )
-        self.con.set_session(autocommit=True)
-        self.cursor = self.con.cursor()
-
-    def _parse(self, result):
-        if result is None:
-            return None
-
-        mtype = result[2]
-        return Message(
-            result[0],
-            result[1],
-            mtype,
-            result[3],
-            result[4],
-            result[5],
-            result[6],
-            result[7],
-            result[8],
-        )
-
-    def _fetch_all(self):
-        rows = self.cursor.fetchall()
-        records = []
-        for row in rows:
-            records.append(self._parse(row))
-
-        return records
-
-    def get_all_messages(self, name, limit=100):
+    def get_reply(self, namespace, name, uid):
+        """Get the replied message from the queue"""
         self.cursor.execute(f"""
         SELECT 
             * 
         FROM 
-            queue_{name}.messages
-        LIMIT {limit}
-        """)
-        return self._fetch_all()
-
-    def get_unread_messages(self, name):
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            queue_{name}.messages
+            {namespace}.{name}
         WHERE 
-            read = false
-        """)
-        return self._fetch_all()
+            replying_to = %s
+        """, (uid,))
 
-    def get_unactioned_messages(self, name):
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            queue_{name}.messages
-        WHERE 
-            read = true        AND
-            actioned = false
-        """)
-        return self._fetch_all()
+        return _parse(self.cursor.fetchone())

@@ -29,7 +29,7 @@ def make_python_broker(uri, *args, **kwargs):
 
 def make_mongo_client(uri, *args, **kwargs):
     from cqueue.backends.mongodb import MongoClient
-    return MongoClient(uri)
+    return MongoClient(uri, *args, **kwargs)
 
 
 def make_mongo_broker(uri, *args, **kwargs):
@@ -42,9 +42,10 @@ def make_cockroach_monitor(uri, *args, **kwargs):
     from cqueue.backends.cockroachdb import CKQueueMonitor
     return CKQueueMonitor(uri, *args, **kwargs)
 
+
 def make_mongo_monitor(uri, *args, **kwargs):
     from cqueue.backends.mongodb import MongoQueueMonitor
-    return MongoQueueMonitor(uri)
+    return MongoQueueMonitor(uri, *args, **kwargs)
 
 
 client_factory = {

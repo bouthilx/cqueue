@@ -28,20 +28,6 @@ class Message:
 
 
 class MessageQueue:
-    def add_handler(self, mtype, handler):
-        """Add a parser for a message type
-
-        Parameters
-        ----------
-        mtype: int
-            message type
-
-        handler: Callable[[Json], ...]
-            message parser
-
-        """
-        raise NotImplementedError()
-
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """Insert a new message inside the queue
 
@@ -58,16 +44,6 @@ class MessageQueue:
 
         replying_to: int
             message id this message replies to
-        """
-        raise NotImplementedError()
-
-    def get_unactioned(self, name):
-        """Return unactioned messages
-
-        Parameters
-        ----------
-        name: str
-            message queue namespace used to get unactioned messages
         """
         raise NotImplementedError()
 
@@ -99,24 +75,28 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def get_reply(self, name, uid):
-        """Fetch the reply to a message
-
-        Parameters
-        ----------
-        name: str
-            Message queue namespace
-
-        uid: Optional[int]
-            uid of the message we want the response of
-        """
-        raise NotImplementedError()
-
     def push(self, name, message, mtype=0, replying_to=None):
         return self.enqueue(name, message, mtype, replying_to)
 
     def pop(self, name):
         return self.dequeue(name)
+
+    def get_reply(self, name):
+        raise NotImplementedError()
+
+
+class QueueMonitor:
+    def get_namespaces(self):
+        raise NotImplementedError()
+
+    def get_all_messages(self, name, limit=100):
+        raise NotImplementedError()
+
+    def get_unread_messages(self, name):
+        raise NotImplementedError()
+
+    def get_unactioned_messages(self, name):
+        raise NotImplementedError()
 
     def unread_count(self, name):
         raise NotImplementedError()
@@ -133,14 +113,4 @@ class MessageQueue:
     def reset_queue(self, name):
         raise NotImplementedError()
 
-
-class QueueMonitor:
-    def get_all_messages(self, name, limit=100):
-        raise NotImplementedError()
-
-    def get_unread_messages(self, name):
-        raise NotImplementedError()
-
-    def get_unactioned_messages(self, name):
-        raise NotImplementedError()
 

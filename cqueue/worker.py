@@ -17,9 +17,10 @@ WORKER_LEFT = 5     # Worker left work group
 
 
 class BaseWorker:
-    def __init__(self, queue_uri, worker_id, work_queue, result_queue=None):
+    def __init__(self, queue_uri, namespace, worker_id, work_queue, result_queue=None):
         self.uri = queue_uri
-        self.client: MessageQueue = make_message_client(queue_uri)
+        self.namespace = namespace
+        self.client: MessageQueue = make_message_client(queue_uri, namespace)
         self.running = False
         self.work_id = worker_id
         self.broker = None
@@ -55,7 +56,7 @@ class BaseWorker:
         info('starting worker')
 
         self.running = True
-        self.client.push(self.result_queue, message={'worker': '1'}, mtype=WORKER_JOIN)
+        self.client.push(self.result_queue, {}, mtype=WORKER_JOIN)
         last_message = None
 
         with self.client:
@@ -83,4 +84,4 @@ class BaseWorker:
                 except Exception:
                     error(traceback.format_exc())
 
-            self.client.push(self.result_queue, message={'worker': '1'}, mtype=WORKER_LEFT)
+            self.client.push(self.result_queue, {}, mtype=WORKER_LEFT)
