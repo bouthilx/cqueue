@@ -8,6 +8,7 @@ class Agent:
     time: datetime
     agent: str
     heartbeat: datetime
+    alive: bool
 
 
 @dataclass
@@ -89,28 +90,31 @@ class QueueMonitor:
     def get_namespaces(self):
         raise NotImplementedError()
 
-    def get_all_messages(self, name, limit=100):
+    def get_all_messages(self, namespace, name, limit=100):
         raise NotImplementedError()
 
-    def get_unread_messages(self, name):
+    def get_unread_messages(self, namespace, name):
         raise NotImplementedError()
 
-    def get_unactioned_messages(self, name):
+    def get_unactioned_messages(self, namespace, name):
         raise NotImplementedError()
 
-    def unread_count(self, name):
+    def unread_count(self, namespace, name):
         raise NotImplementedError()
 
-    def unactioned_count(self, name):
+    def unactioned_count(self, namespace, name):
         raise NotImplementedError()
 
-    def actioned_count(self, name):
+    def actioned_count(self, namespace, name):
         raise NotImplementedError()
 
-    def read_count(self, name):
+    def read_count(self, namespace, name):
         raise NotImplementedError()
 
-    def reset_queue(self, name):
+    def reset_queue(self, namespace, name):
+        raise NotImplementedError()
+
+    def agents(self, namespace):
         raise NotImplementedError()
 
 

@@ -11,7 +11,7 @@ import threading
 from multiprocessing import Process, Manager
 from cqueue.logs import debug, info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, QueueMonitor
+from cqueue.backends.queue import Message, MessageQueue, QueueMonitor, Agent
 
 
 VERSION = '19.1.1'
@@ -124,7 +124,8 @@ def message_queue_schema(clients, namespace, name):
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
         agent           JSONB,
-        heartbeat       TIMESTAMP   DEFAULT current_timestamp()
+        heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
+        alive           BOOLEAN     DEFAULT true
     );
 
     CREATE DATABASE IF NOT EXISTS qsystem;
@@ -307,7 +308,6 @@ class CockRoachDB:
             f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
         debug(out.decode('utf8').strip())
 
-
     def stop(self):
         self.properties['running'] = False
         self._process.terminate()
@@ -420,6 +420,19 @@ def _parse(result):
     )
 
 
+def _parse_agent(result):
+    if result is None:
+        return None
+
+    return Agent(
+        result[0],
+        result[1],
+        result[2],
+        result[3],
+        result[4]
+    )
+
+
 class CKMQClient(MessageQueue):
     """Simple cockroach db queue client
 
@@ -447,10 +460,11 @@ class CKMQClient(MessageQueue):
         self.name = name
         self.agent_id = None
         self.namespace = namespace
-        self.heartbeat_monitor = AgentMonitor(self, namespace, wait_time=60)
+        self.heartbeat_monitor = None
 
     def __enter__(self):
         self.agent_id = self._register_agent(self.name)
+        self.heartbeat_monitor = AgentMonitor(self, self.namespace, wait_time=60)
         self.heartbeat_monitor.start()
         return self
 
@@ -466,6 +480,10 @@ class CKMQClient(MessageQueue):
             (%s)
         RETURNING uid
         """, (json.dumps(agent_name),))
+
+        if self.cursor.rowcount <= 0:
+            return None
+
         return self.cursor.fetchone()[0]
 
     def _update_heartbeat(self):
@@ -477,7 +495,10 @@ class CKMQClient(MessageQueue):
         """, (self.agent_id,))
 
     def _remove(self):
-        self.cursor.execute(f'DELETE FROM {self.namespace}.system WHERE uid = %s', (self.agent_id,))
+        self.cursor.execute(f"""
+        UPDATE {self.namespace}.system SET
+            alive = false
+        WHERE uid = %s""", (self.agent_id,))
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -488,6 +509,9 @@ class CKMQClient(MessageQueue):
             (%s, %s, %s, %s, %s)
         RETURNING uid
         """, (mtype, False, False, json.dumps(message), replying_to))
+
+        if self.cursor.rowcount <= 0:
+            return None
 
         return self.cursor.fetchone()[0]
 
@@ -505,6 +529,9 @@ class CKMQClient(MessageQueue):
         RETURNING *
         """)
 
+        if self.cursor.rowcount <= 0:
+            return None
+
         return _parse(self.cursor.fetchone())
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
@@ -520,6 +547,9 @@ class CKMQClient(MessageQueue):
             uid = %s
         RETURNING *
         """, (uid,))
+
+        if self.cursor.rowcount <= 0:
+            return None
 
         return _parse(self.cursor.fetchone())
 
@@ -569,6 +599,9 @@ class CKQueueMonitor(QueueMonitor):
         FROM qsystem.namespaces;
         """)
 
+        if self.cursor.rowcount <= 0:
+            return []
+
         return [(n[0], n[1]) for n in self.cursor.fetchall()]
 
     def archive_namespace(self, namespace):
@@ -607,6 +640,10 @@ class CKQueueMonitor(QueueMonitor):
             {namespace}.{name}
         LIMIT {limit}
         """)
+
+        if self.cursor.rowcount <= 0:
+            return []
+
         return self._fetch_all()
 
     def get_unread_messages(self, namespace, name):
@@ -618,6 +655,10 @@ class CKQueueMonitor(QueueMonitor):
         WHERE 
             read = false
         """)
+
+        if self.cursor.rowcount <= 0:
+            return []
+
         return self._fetch_all()
 
     def get_unactioned_messages(self, namespace, name):
@@ -630,6 +671,10 @@ class CKQueueMonitor(QueueMonitor):
             read = true        AND
             actioned = false
         """)
+
+        if self.cursor.rowcount <= 0:
+            return []
+
         return self._fetch_all()
 
     def unread_count(self, namespace, name):
@@ -641,6 +686,10 @@ class CKQueueMonitor(QueueMonitor):
         WHERE 
             read = false
         """)
+
+        if self.cursor.rowcount <= 0:
+            return None
+
         return self.cursor.fetchone()[0]
 
     def unactioned_count(self, namespace, name):
@@ -652,6 +701,10 @@ class CKQueueMonitor(QueueMonitor):
         WHERE 
             actioned = false
         """)
+
+        if self.cursor.rowcount <= 0:
+            return None
+
         return self.cursor.fetchone()[0]
 
     def read_count(self, namespace, name):
@@ -663,6 +716,10 @@ class CKQueueMonitor(QueueMonitor):
         WHERE 
             read = true
         """)
+
+        if self.cursor.rowcount <= 0:
+            return None
+
         return self.cursor.fetchone()[0]
 
     def actioned_count(self, namespace, name):
@@ -674,6 +731,10 @@ class CKQueueMonitor(QueueMonitor):
         WHERE 
             actioned = true
         """)
+
+        if self.cursor.rowcount <= 0:
+            return None
+
         return self.cursor.fetchone()[0]
 
     def reset_queue(self, namespace, name):
@@ -693,6 +754,9 @@ class CKQueueMonitor(QueueMonitor):
         RETURNING *
         """)
 
+        if self.cursor.rowcount <= 0:
+            return []
+
         rows = self.cursor.fetchall()
         records = []
         for row in rows:
@@ -711,4 +775,20 @@ class CKQueueMonitor(QueueMonitor):
             replying_to = %s
         """, (uid,))
 
+        if self.cursor.rowcount <= 0:
+            return None
+
         return _parse(self.cursor.fetchone())
+
+    def agents(self, namespace):
+        self.cursor.execute(f"""
+        SELECT 
+            *
+        FROM
+            {namespace}.system
+        """)
+
+        if self.cursor.rowcount <= 0:
+            return []
+
+        return [_parse_agent(a) for a in self.cursor.fetchall()]

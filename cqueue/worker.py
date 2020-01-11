@@ -9,6 +9,7 @@ from cqueue.backends.queue import MessageQueue, Message
 WORK_QUEUE = 'work'
 RESULT_QUEUE = 'result'
 
+
 WORKER_JOIN = 1     # Worker joined work group
 WORK_ITEM   = 2     # Worker received work item
 RESULT_ITEM = 3     # Worker pushing results
@@ -37,6 +38,7 @@ class BaseWorker:
         return None
 
     def shutdown_worker(self, message: Message, context: Dict):
+        info('shutting down')
         self.running = False
         return None
 

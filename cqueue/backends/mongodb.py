@@ -211,10 +211,11 @@ class MongoClient(MessageQueue):
         self.name = name
         self.namespace = namespace
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
-        self.heartbeat_monitor = AgentMonitor(self, namespace, wait_time=60)
+        self.heartbeat_monitor = None
 
     def __enter__(self):
         self.agent_id = self._register_agent(self.name)
+        self.heartbeat_monitor = AgentMonitor(self, self.namespace, wait_time=60)
         self.heartbeat_monitor.start()
         return self
 
@@ -223,13 +224,12 @@ class MongoClient(MessageQueue):
         self._remove()
 
     def _register_agent(self, agent_name):
-        rc = self.client[self.namespace].system.insert_one(
-            {
-                'time': datetime.datetime.utcnow(),
-                'agent': agent_name,
-                'heartbeat': datetime.datetime.utcnow()
-            }
-        ).inserted_id
+        rc = self.client[self.namespace].system.insert_one({
+            'time': datetime.datetime.utcnow(),
+            'agent': agent_name,
+            'heartbeat': datetime.datetime.utcnow(),
+            'alive': True
+        }).inserted_id
         return rc
 
     def _update_heartbeat(self):
@@ -238,7 +238,9 @@ class MongoClient(MessageQueue):
         })
 
     def _remove(self):
-        self.client[self.namespace].system.remove({'_id': self.agent_id})
+        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
+            'alive': False
+        })
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
