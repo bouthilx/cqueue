@@ -7,8 +7,10 @@ import subprocess
 import time
 import traceback
 import threading
+from threading import RLock
 
 from multiprocessing import Process, Manager
+
 from cqueue.logs import debug, info, error
 from cqueue.uri import parse_uri
 from cqueue.backends.queue import Message, MessageQueue, QueueMonitor, Agent
@@ -560,6 +562,10 @@ class CKMQClient(MessageQueue):
 
 class CKQueueMonitor(QueueMonitor):
     def __init__(self, uri=None, cursor=None):
+        # When using this inside a dashbord it is executed in a multi threaded environment
+        # You need to lock the cursor to not get some errors
+        self.lock = RLock()
+
         if cursor is None:
             uri = parse_uri(uri)
             self.con = psycopg2.connect(
@@ -593,16 +599,14 @@ class CKQueueMonitor(QueueMonitor):
             print(_parse(row))
 
     def get_namespaces(self):
-        self.cursor.execute(f"""
-        SELECT
-            *
-        FROM qsystem.namespaces;
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT
+                *
+            FROM qsystem.namespaces;
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
-
-        return [(n[0], n[1]) for n in self.cursor.fetchall()]
+            return [(n[0], n[1]) for n in self.cursor.fetchall()]
 
     def archive_namespace(self, namespace):
         # TODO create partition per namespace
@@ -633,162 +637,134 @@ class CKQueueMonitor(QueueMonitor):
         """)
 
     def get_all_messages(self, namespace, name, limit=100):
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            {namespace}.{name}
-        LIMIT {limit}
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                * 
+            FROM 
+                {namespace}.{name}
+            LIMIT {limit}
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
-
-        return self._fetch_all()
+            return self._fetch_all()
 
     def get_unread_messages(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            read = false
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                * 
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                read = false
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
-
-        return self._fetch_all()
+            return self._fetch_all()
 
     def get_unactioned_messages(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            read = true        AND
-            actioned = false
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                * 
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                read = true        AND
+                actioned = false
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
-
-        return self._fetch_all()
+            return self._fetch_all()
 
     def unread_count(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            COUNT(*)
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            read = false
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                COUNT(*)
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                read = false
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
+            return self.cursor.fetchone()[0]
 
     def unactioned_count(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            COUNT(*)
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            actioned = false
-        """)
-
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
-
-    def read_count(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            COUNT(*)
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            read = true
-        """)
-
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
-
-    def actioned_count(self, namespace, name):
-        self.cursor.execute(f"""
-        SELECT 
-            COUNT(*)
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            actioned = true
-        """)
-
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
-
-    def reset_queue(self, namespace, name):
-        """Resume queue from previous statement
-
-        Returns
-        --------
-        returns all the restored messages
-
-        """
-        self.cursor.execute(f"""
-        UPDATE {namespace}.{name}
-            SET 
-                (read, read_time) = (false, null)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                COUNT(*)
+            FROM 
+                {namespace}.{name}
             WHERE 
                 actioned = false
-        RETURNING *
-        """)
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
+            return self.cursor.fetchone()[0]
 
-        rows = self.cursor.fetchall()
-        records = []
-        for row in rows:
-            records.append(_parse(row))
+    def read_count(self, namespace, name):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                COUNT(*)
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                read = true
+            """)
 
-        return records
+            return self.cursor.fetchone()[0]
+
+    def actioned_count(self, namespace, name):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                COUNT(*)
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                actioned = true
+            """)
+
+            return self.cursor.fetchone()[0]
+
+    def reset_queue(self, namespace, name):
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {namespace}.{name}
+                SET 
+                    (read, read_time) = (false, null)
+                WHERE 
+                    actioned = false
+            RETURNING *
+            """)
+
+            rows = self.cursor.fetchall()
+            records = []
+            for row in rows:
+                records.append(_parse(row))
+
+            return records
 
     def get_reply(self, namespace, name, uid):
-        """Get the replied message from the queue"""
-        self.cursor.execute(f"""
-        SELECT 
-            * 
-        FROM 
-            {namespace}.{name}
-        WHERE 
-            replying_to = %s
-        """, (uid,))
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                * 
+            FROM 
+                {namespace}.{name}
+            WHERE 
+                replying_to = %s
+            """, (uid,))
 
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return _parse(self.cursor.fetchone())
+            return _parse(self.cursor.fetchone())
 
     def agents(self, namespace):
-        self.cursor.execute(f"""
-        SELECT 
-            *
-        FROM
-            {namespace}.system
-        """)
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                *
+            FROM
+                {namespace}.system
+            """)
 
-        if self.cursor.rowcount <= 0:
-            return []
-
-        return [_parse_agent(a) for a in self.cursor.fetchall()]
+            return [_parse_agent(a) for a in self.cursor.fetchall()]

@@ -7,6 +7,7 @@ import subprocess
 import time
 import traceback
 import threading
+from threading import RLock
 
 from multiprocessing import Process, Manager
 from cqueue.logs import info, error
@@ -305,6 +306,10 @@ def start_mongod():
 
 class MongoQueueMonitor(QueueMonitor):
     def __init__(self, uri=None, cursor=None):
+        # When using this inside a dashbord it is executed in a multi threaded environment
+        # You need to lock the cursor to not get some errors
+        self.lock = RLock()
+
         if cursor is None:
             uri = parse_uri(uri)
             self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
@@ -312,81 +317,84 @@ class MongoQueueMonitor(QueueMonitor):
             self.client = cursor
 
     def get_namespaces(self):
-        return [(n['namespace'], n['name']) for n in self.client.qsystem.namespaces.find({})]
-
+        with self.lock:
+            return [(n['namespace'], n['name']) for n in self.client.qsystem.namespaces.find({})]
 
     def get_reply(self, namespace, name, uid):
-        msg = self.client[namespace][name].find_one(
-            {'replying_to': uid},
-        )
-        return _parse(msg)
+        with self.lock:
+            msg = self.client[namespace][name].find_one(
+                {'replying_to': uid},
+            )
+            return _parse(msg)
 
     def get_all_messages(self, namespace, name, limit=100):
-        return [
-            _parse(msg) for msg in self.client[namespace][name].find({})]
+        with self.lock:
+            return [
+                _parse(msg) for msg in self.client[namespace][name].find({})]
 
     def get_unread_messages(self, namespace, name):
-        return [
-            _parse(msg) for msg in self.client[namespace][name].find({'read': False})]
+        with self.lock:
+            return [
+                _parse(msg) for msg in self.client[namespace][name].find({'read': False})]
 
     def get_unactioned_messages(self, namespace, name):
-        return [
-            _parse(msg) for msg in self.client[namespace][name].find({'actioned': False, 'read': True})]
+        with self.lock:
+            return [
+                _parse(msg) for msg in self.client[namespace][name].find({'actioned': False, 'read': True})]
 
     def unread_count(self, namespace, name):
-        return self.client[namespace][name].count({'read': False})
+        with self.lock:
+            return self.client[namespace][name].count({'read': False})
 
     def unactioned_count(self, namespace, name):
-        return self.client[namespace][name].count({'actioned': False})
+        with self.lock:
+            return self.client[namespace][name].count({'actioned': False})
 
     def read_count(self, namespace, name):
-        return self.client[namespace][name].count({'read': True})
+        with self.lock:
+            return self.client[namespace][name].count({'read': True})
 
     def actioned_count(self, namespace, name):
-        return self.client[namespace][name].count({'actioned': True})
+        with self.lock:
+            return self.client[namespace][name].count({'actioned': True})
 
     def agent_count(self, namespace):
-        return self.client[namespace].system.count()
+        with self.lock:
+            return self.client[namespace].system.count()
 
     def agents(self, namespace):
-        agents = self.client[namespace].system.find()
-        results = []
+        with self.lock:
+            agents = self.client[namespace].system.find()
+            results = []
 
-        for agent in agents:
-            agent['uid'] = agent['_id']
-            agent.pop('_id')
+            for agent in agents:
+                agent['uid'] = agent['_id']
+                agent.pop('_id')
 
-            results.append(Agent(**agent))
+                results.append(Agent(**agent))
 
-        return results
+            return results
 
     def reset_queue(self, namespace, name):
-        """Resume queue from previous statement
+        with self.lock:
+            msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
+            rc = self.client[namespace][name].update(
+                {'actioned': False},
+                {'$set': {
+                    'read': False, 'read_time': None}
+                }
+            )
 
-        Returns
-        --------
-        returns all the restored messages
+            items = []
+            for msg in msgs:
+                items.append(_parse(msg))
 
-        """
-
-        msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
-        rc = self.client[namespace][name].update(
-            {'actioned': False},
-            {'$set': {
-                'read': False, 'read_time': None}
-            }
-        )
-
-        items = []
-        for msg in msgs:
-            items.append(_parse(msg))
-
-        return items
-
+            return items
 
     def get_unactioned(self, namespace, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
+        with self.lock:
+            return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
 
     def dump(self, namespace, name):
         rows = self.client[namespace][name].find()
