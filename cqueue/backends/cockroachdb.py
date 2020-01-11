@@ -72,7 +72,6 @@ def track_schema(clients):
         chronos     JSONB,
         status      JSONB,
         errors      JSONB,
-
         PRIMARY KEY (hash, revision)
     );""".encode('utf8')
 
@@ -89,6 +88,7 @@ def message_queue_schema(clients, namespace, name):
     message      : the message
     """
     assert name != 'system', 'system name is reserved'
+    assert name != 'logs', 'logs name is reserved'
 
     user = []
     for client in clients:
@@ -100,6 +100,8 @@ def message_queue_schema(clients, namespace, name):
         permissions.append(f'GRANT ALL ON DATABASE {namespace} TO {client};')
         permissions.append(f'GRANT ALL ON TABLE {namespace}.{name} TO {client};')
         permissions.append(f'GRANT ALL ON TABLE {namespace}.system TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {namespace}.logs TO {client};')
+
         permissions.append(f'GRANT ALL ON DATABASE archive TO {client};')
         permissions.append(f'GRANT ALL ON TABLE archive.messages TO {client};')
         permissions.append(f'GRANT ALL ON DATABASE qsystem TO {client};')
@@ -127,22 +129,43 @@ def message_queue_schema(clients, namespace, name):
         agent           JSONB,
         heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
         alive           BOOLEAN     DEFAULT true,
-        message         INTEGER
+        message         INTEGER,
+        queue           character(64)
+    );
+    CREATE TABLE IF NOT EXISTS {namespace}.logs (
+        uid             SERIAL      PRIMARY KEY,
+        agent           INTEGER,
+        ltype           INT,
+        line            TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS messages_index
+    ON {namespace}.{name} (
+        read        DESC, 
+        time        DESC,
+        actioned    DESC,
+        mtype       ASC,
+        replying_to DESC
+    );
+
+    CREATE INDEX IF NOT EXISTS system_index
+    ON {namespace}.system (
+        uid         ASC,
+        message     ASC,
+        queue       ASC
+    );
+
+    CREATE INDEX IF NOT EXISTS logs_index
+    ON {namespace}.logs (
+        uid         ASC,
+        ltype       ASC,
+        agent       ASC
     );
 
     CREATE DATABASE IF NOT EXISTS qsystem;
     CREATE TABLE IF NOT EXISTS qsystem.namespaces (
         namespace       character(64),
         name            character(64)
-    );
-
-    CREATE INDEX IF NOT EXISTS messages_index
-    ON {namespace}.{name}  (
-        read        DESC, 
-        time        DESC,
-        actioned    DESC,
-        mtype       ASC,
-        replying_to DESC
     );
 
     CREATE DATABASE IF NOT EXISTS archive;
@@ -402,15 +425,16 @@ def _parse_agent(result):
         result[2],
         result[3],
         result[4],
-        message=result[5]
+        result[5],
+        result[6]
     )
 
 
 class CKPacemaker(QueuePacemaker):
-    def __init__(self, agent, namespace, wait_time=60):
-        super(CKPacemaker, self).__init__(agent, namespace, wait_time)
+    def __init__(self, agent, namespace, wait_time, capture):
         self.cursor = agent.cursor
         self.lock = agent.lock
+        super(CKPacemaker, self).__init__(agent, namespace, wait_time, capture)
 
     def register_agent(self, agent_name):
         with self.lock:
@@ -436,19 +460,30 @@ class CKPacemaker(QueuePacemaker):
                 uid = %s
             """, (self.agent_id,))
 
-    def register_message(self, message):
+    def register_message(self, name, message):
         if message is None:
             return None
 
         with self.lock:
             self.cursor.execute(f"""
             UPDATE {self.namespace}.system SET
-                message = %s
+                message = %s,
+                queue = %s
             WHERE 
                 uid = %s
-            """, (message.uid, self.agent_id))
+            """, (message.uid, name, self.agent_id))
 
             return message
+
+    def unregister_message(self, uid):
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.system SET
+                message = NULL
+            WHERE 
+                uid = %s AND
+                message = %s
+            """, (self.agent_id, uid))
 
     def unregister_agent(self):
         with self.lock:
@@ -458,6 +493,17 @@ class CKPacemaker(QueuePacemaker):
             WHERE 
                 uid = %s
             """, (self.agent_id,))
+
+    def insert_log_line(self, line, ltype=0):
+        if self.agent_id is None:
+            return
+
+        with self.lock:
+            self.cursor.execute(f"""
+            INSERT INTO {self.namespace}.logs (agent, ltype, line)
+            VALUES
+                (%s, %s, %s)
+            """, (self.agent_id, ltype, line))
 
 
 class CKMQClient(MessageQueue):
@@ -490,8 +536,11 @@ class CKMQClient(MessageQueue):
         self.heartbeat_monitor = None
         self.lock = RLock()
 
-    def pacemaker(self, namespace, wait_time):
-        return CKPacemaker(self, namespace, wait_time)
+        self.capture = True
+        self.timeout = 60
+
+    def pacemaker(self, namespace, wait_time, capture):
+        return CKPacemaker(self, namespace, wait_time, capture)
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -520,7 +569,7 @@ class CKMQClient(MessageQueue):
             RETURNING *
             """)
 
-            return self.heartbeat_monitor.register_message(_parse(self.cursor.fetchone()))
+            return self.heartbeat_monitor.register_message(name, _parse(self.cursor.fetchone()))
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -533,10 +582,10 @@ class CKMQClient(MessageQueue):
                 (actioned, actioned_time) = (true, current_timestamp())
             WHERE 
                 uid = %s
-            RETURNING *
             """, (uid,))
 
-            return _parse(self.cursor.fetchone())
+            self.heartbeat_monitor.unregister_message(uid)
+            return message
 
     def get_reply(self, name, uid):
         return CKQueueMonitor(
@@ -752,3 +801,63 @@ class CKQueueMonitor(QueueMonitor):
             """)
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
+
+    def fetch_dead_agent(self, namespace, timeout_s=60):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT
+                *
+            FROM
+                {namespace}.system
+            WHERE
+                alive = true                                        AND
+                current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
+            """)
+
+        return [_parse_agent(agent) for agent in self.cursor.fetchall()]
+
+    def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT
+                *
+            FROM
+                {namespace}.system
+            WHERE
+                message != NULL                                     AND
+                current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
+            """)
+
+        agents = [_parse_agent(agent) for agent in self.cursor.fetchall()]
+
+        if reset_messages:
+            for a in agents:
+                self.cursor.execute(f"""
+                UPDATE {namespace}.{a.queue}
+                SET 
+                    (read, read_time) = (false, null)
+                WHERE 
+                    uid = {a.message} AND
+                    read = true       AND
+                    actioned = false
+                """)
+
+        msg = []
+        for a in agents:
+            msg.append(a.message, a.queue)
+
+        return msg
+
+    def get_log(self, namespace, agent, ltype=0):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT 
+                line
+            FROM 
+                {namespace}.logs
+            WHERE
+                agent = %s AND
+                ltype = %s
+            """, (agent, ltype))
+
+            return ''.join([r[0] for r in self.cursor.fetchall()])

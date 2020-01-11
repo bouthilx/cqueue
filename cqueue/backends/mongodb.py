@@ -154,9 +154,9 @@ def start_message_queue(location, addrs, join=None, clean_on_exit=True):
 
 
 class MongoQueuePacemaker(QueuePacemaker):
-    def __init__(self, agent, namespace, wait_time=60):
-        super(MongoQueuePacemaker, self).__init__(agent, namespace, wait_time)
+    def __init__(self, agent, namespace, wait_time, capture):
         self.client = agent.client
+        super(MongoQueuePacemaker, self).__init__(agent, namespace, wait_time, capture)
 
     def register_agent(self, agent_name):
         self.agent_id = self.client[self.namespace].system.insert_one({
@@ -164,31 +164,58 @@ class MongoQueuePacemaker(QueuePacemaker):
             'agent': agent_name,
             'heartbeat': datetime.datetime.utcnow(),
             'alive': True,
-            'message': None
+            'message': None,
+            'queue': None
         }).inserted_id
         return self.agent_id
 
     def update_heartbeat(self):
         self.client[self.namespace].system.update_one(
-            {'_id': self.agent.agent_id},
+            {'_id': self.agent_id},
             {'$set': {
-                'heartbeat': datetime.datetime.utcnow()
-                }
+                'heartbeat': datetime.datetime.utcnow()}
             })
 
-    def register_message(self, message):
+    def register_message(self, name, message):
         if message is None:
             return None
 
         self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
-            '$set': {'message': message.uid}
+            '$set': {
+                'message': message.uid,
+                'queue': name
+            }
         })
         return message
+
+    def unregister_message(self, uid=None):
+        self.client[self.namespace].system.update_one({
+            '_id': self.agent_id,
+            'message': uid}, {
+            '$set': {
+                'message': None,
+                'queue': None}})
 
     def unregister_agent(self):
         self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
             '$set': {'alive': False}
         })
+
+    def insert_log_line(self, line, ltype=0):
+        if self.agent_id is None:
+            return
+
+        self.client[self.namespace].logs.insert_one({
+            'agent': self.agent_id,
+            'ltype': ltype,
+            'line': line
+        })
+
+
+def _parse_agent(agent):
+    agent['uid'] = agent['_id']
+    agent.pop('_id')
+    return Agent(**agent)
 
 
 def _parse(result):
@@ -224,8 +251,11 @@ class MongoClient(MessageQueue):
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
         self.heartbeat_monitor = None
 
-    def pacemaker(self, namespace, wait_time):
-        return MongoQueuePacemaker(self, namespace, wait_time)
+        self.capture = True
+        self.timeout = 60
+
+    def pacemaker(self, namespace, wait_time, capture):
+        return MongoQueuePacemaker(self, namespace, wait_time, capture)
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -249,23 +279,22 @@ class MongoClient(MessageQueue):
             },
             return_document=pymongo.ReturnDocument.AFTER
         )
-        return _parse(msg)
+        return self.heartbeat_monitor.register_message(name, _parse(msg))
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         if isinstance(message, Message):
             uid = message.uid
 
-        msg = self.client[self.namespace][name].find_one_and_update(
+        self.client[self.namespace][name].find_one_and_update(
             {'_id': uid},
             {'$set': {
                 'actioned': True,
                 'actioned_time': datetime.datetime.utcnow()}
-            },
-            return_document=pymongo.ReturnDocument.AFTER
+            }
         )
-
-        return self.heartbeat_monitor.register_message(_parse(msg))
+        self.heartbeat_monitor.unregister_message(uid)
+        return message
 
     def get_reply(self, name, uid):
         return MongoQueueMonitor(
@@ -346,19 +375,6 @@ class MongoQueueMonitor(QueueMonitor):
         with self.lock:
             return self.client[namespace].system.count()
 
-    def agents(self, namespace):
-        with self.lock:
-            agents = self.client[namespace].system.find()
-            results = []
-
-            for agent in agents:
-                agent['uid'] = agent['_id']
-                agent.pop('_id')
-
-                results.append(Agent(**agent))
-
-            return results
-
     def reset_queue(self, namespace, name):
         with self.lock:
             msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
@@ -384,3 +400,57 @@ class MongoQueueMonitor(QueueMonitor):
         rows = self.client[namespace][name].find()
         for row in rows:
             print(_parse(row))
+
+    def agents(self, namespace):
+        with self.lock:
+            agents = self.client[namespace].system.find()
+            return [_parse_agent(agent) for agent in agents]
+
+    def fetch_dead_agent(self, namespace, timeout_s=60):
+        agents = self.client[namespace].system.find({
+            'heartbeat': {
+                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s, granularity='seconds')
+            },
+            'alive': {
+                '$eq': True
+            }
+        })
+
+        return [_parse_agent(agent) for agent in agents]
+
+    def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
+        agents = self.client[namespace].system.find({
+            'heartbeat': {
+                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
+            },
+            'message': {
+                '$ne': None
+            }
+        })
+
+        if reset_messages:
+            for a in agents:
+                self.client[namespace][a.queue].update({
+                    '_id': a.message,
+                    'read': True,
+                    'actioned': False
+                }, {
+                    'read': {'$set': False},
+                    'read_time': {'$set': None}
+                })
+
+        msg = []
+        for a in agents:
+            msg.append(a.message, a.queue)
+
+        return msg
+
+    def get_log(self, namespace, agent, ltype=0):
+        from bson import ObjectId
+
+        lines = self.client[namespace].logs.find({
+            'agent': ObjectId(agent),
+            'ltype': ltype
+        })
+        print(namespace, agent)
+        return ''.join([l['line'] for l in lines])

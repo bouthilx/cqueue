@@ -59,31 +59,32 @@ class BaseWorker:
 
         self.running = True
         self.client.push(self.result_queue, {}, mtype=WORKER_JOIN)
-        last_message = None
 
         with self.client:
             while self.running:
+                # This code should not throw
+                workitem = self.pop_workitem()
+
+                # wait for more work to come through
+                if workitem is None:
+                    if stop_when_empty:
+                        return
+                    else:
+                        time.sleep(0.01)
+                    continue
+
+                handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
+
+                # Error handling for User code
                 try:
-                    workitem = self.pop_workitem()
-
-                    # wait for more work to come through
-                    if workitem is None:
-                        if stop_when_empty:
-                            return
-                        else:
-                            time.sleep(0.01)
-                        continue
-
-                    handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
                     result = handler(workitem, self.context)
 
                     if self.result_queue is not None and result is not None:
                         self.push_result(result, replying_to=workitem.uid)
 
                     self.client.mark_actioned(self.work_queue, workitem)
-                    last_message = workitem
-
                 except Exception:
                     error(traceback.format_exc())
 
+            # --
             self.client.push(self.result_queue, {}, mtype=WORKER_LEFT)
