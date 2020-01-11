@@ -12,7 +12,7 @@ from threading import RLock
 from multiprocessing import Process, Manager
 from cqueue.logs import info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, Agent, QueueMonitor
+from cqueue.backends.queue import Message, MessageQueue, Agent, QueueMonitor, QueuePacemaker
 
 _base = os.path.dirname(os.path.realpath(__file__))
 
@@ -153,24 +153,20 @@ def start_message_queue(location, addrs, join=None, clean_on_exit=True):
     return cockroach
 
 
-class AgentMonitor(threading.Thread):
+class MongoQueuePacemaker(QueuePacemaker):
     def __init__(self, agent, namespace, wait_time=60):
-        threading.Thread.__init__(self)
-        self.namespace = namespace
-        self.stopped = threading.Event()
-        self.wait_time = wait_time
-        self.agent = agent
+        super(MongoQueuePacemaker, self).__init__(agent, namespace, wait_time)
         self.client = agent.client
 
-    def stop(self):
-        """Stop monitoring."""
-        self.stopped.set()
-        self.join()
-
-    def run(self):
-        """Run the trial monitoring every given interval."""
-        while not self.stopped.wait(self.wait_time):
-            self.update_heartbeat()
+    def register_agent(self, agent_name):
+        self.agent_id = self.client[self.namespace].system.insert_one({
+            'time': datetime.datetime.utcnow(),
+            'agent': agent_name,
+            'heartbeat': datetime.datetime.utcnow(),
+            'alive': True,
+            'message': None
+        }).inserted_id
+        return self.agent_id
 
     def update_heartbeat(self):
         self.client[self.namespace].system.update_one(
@@ -179,6 +175,20 @@ class AgentMonitor(threading.Thread):
                 'heartbeat': datetime.datetime.utcnow()
                 }
             })
+
+    def register_message(self, message):
+        if message is None:
+            return None
+
+        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
+            '$set': {'message': message.uid}
+        })
+        return message
+
+    def unregister_agent(self):
+        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
+            '$set': {'alive': False}
+        })
 
 
 def _parse(result):
@@ -214,34 +224,8 @@ class MongoClient(MessageQueue):
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
         self.heartbeat_monitor = None
 
-    def __enter__(self):
-        self.agent_id = self._register_agent(self.name)
-        self.heartbeat_monitor = AgentMonitor(self, self.namespace, wait_time=60)
-        self.heartbeat_monitor.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.heartbeat_monitor.stop()
-        self._remove()
-
-    def _register_agent(self, agent_name):
-        rc = self.client[self.namespace].system.insert_one({
-            'time': datetime.datetime.utcnow(),
-            'agent': agent_name,
-            'heartbeat': datetime.datetime.utcnow(),
-            'alive': True
-        }).inserted_id
-        return rc
-
-    def _update_heartbeat(self):
-        return self.client[self.namespace].update_one({'_id': self.agent_id}, {
-            'heartbeat': datetime.datetime.utcnow()
-        })
-
-    def _remove(self):
-        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
-            'alive': False
-        })
+    def pacemaker(self, namespace, wait_time):
+        return MongoQueuePacemaker(self, namespace, wait_time)
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -255,10 +239,6 @@ class MongoClient(MessageQueue):
             'replying_to': replying_to,
             'message': message,
         }).inserted_id
-
-    def get_reply(self, name, uid):
-        return MongoQueueMonitor(
-            cursor=self.client).get_reply(self.namespace, name, uid)
 
     def dequeue(self, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -285,7 +265,11 @@ class MongoClient(MessageQueue):
             return_document=pymongo.ReturnDocument.AFTER
         )
 
-        return _parse(msg)
+        return self.heartbeat_monitor.register_message(_parse(msg))
+
+    def get_reply(self, name, uid):
+        return MongoQueueMonitor(
+            cursor=self.client).get_reply(self.namespace, name, uid)
 
 
 def start_mongod():

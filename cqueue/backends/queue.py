@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import threading
 
 
 @dataclass
@@ -9,6 +10,7 @@ class Agent:
     agent: str
     heartbeat: datetime
     alive: bool
+    message: int
 
 
 @dataclass
@@ -28,7 +30,52 @@ class Message:
             f"""{self.read_time}, {self.actioned}, {self.actioned_time}, {self.message})"""
 
 
+class QueuePacemaker(threading.Thread):
+    def __init__(self, agent, namespace, wait_time=60):
+        threading.Thread.__init__(self)
+        self.namespace = namespace
+        self.stopped = threading.Event()
+        self.wait_time = wait_time
+        self.agent = agent
+        self.agent_id = None
+
+    def register_agent(self, agent_name):
+        raise NotImplementedError()
+
+    def run(self):
+        """Run the trial monitoring every given interval."""
+        while not self.stopped.wait(self.wait_time):
+            self.update_heartbeat()
+
+    def update_heartbeat(self):
+        raise NotImplementedError()
+
+    def register_message(self, message):
+        pass
+
+    def stop(self):
+        """Stop monitoring."""
+        self.stopped.set()
+        self.join()
+
+    def unregister_agent(self):
+        raise NotImplementedError()
+
+
 class MessageQueue:
+    def pacemaker(self, namespace, wait_time):
+        raise NotImplementedError()
+
+    def __enter__(self):
+        self.heartbeat_monitor = self.pacemaker(self.namespace, wait_time=60)
+        self.heartbeat_monitor.register_agent(self.name)
+        self.heartbeat_monitor.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.heartbeat_monitor.stop()
+        self.heartbeat_monitor.unregister_agent()
+
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """Insert a new message inside the queue
 

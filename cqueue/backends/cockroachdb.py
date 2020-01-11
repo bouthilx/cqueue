@@ -6,14 +6,13 @@ import signal
 import subprocess
 import time
 import traceback
-import threading
 from threading import RLock
 
 from multiprocessing import Process, Manager
 
 from cqueue.logs import debug, info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, QueueMonitor, Agent
+from cqueue.backends.queue import Message, MessageQueue, QueueMonitor, Agent, QueuePacemaker
 
 
 VERSION = '19.1.1'
@@ -127,7 +126,8 @@ def message_queue_schema(clients, namespace, name):
         time            TIMESTAMP   DEFAULT current_timestamp(),
         agent           JSONB,
         heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
-        alive           BOOLEAN     DEFAULT true
+        alive           BOOLEAN     DEFAULT true,
+        message         INTEGER
     );
 
     CREATE DATABASE IF NOT EXISTS qsystem;
@@ -375,36 +375,6 @@ def start_message_queue(name, location, addrs, join=None, clean_on_exit=True):
     return cockroach
 
 
-class AgentMonitor(threading.Thread):
-    def __init__(self, agent, namespace, wait_time=60):
-        threading.Thread.__init__(self)
-        self.stopped = threading.Event()
-        self.wait_time = wait_time
-        self.agent = agent
-        self.cursor = agent.cursor
-        self.namespace = namespace
-
-    def stop(self):
-        """Stop monitoring."""
-        self.stopped.set()
-        self.join()
-
-    def run(self):
-        """Run the trial monitoring every given interval."""
-        while not self.stopped.wait(self.wait_time):
-            self.update_heartbeat()
-
-    def update_heartbeat(self):
-        self.cursor.execute(f"""
-        UPDATE 
-            {self.namespace}.system
-        SET 
-            heartbeat = current_timestamp()
-        WHERE
-            uid = %s
-        """, (self.agent.agent_id,))
-
-
 def _parse(result):
     if result is None:
         return None
@@ -431,8 +401,63 @@ def _parse_agent(result):
         result[1],
         result[2],
         result[3],
-        result[4]
+        result[4],
+        message=result[5]
     )
+
+
+class CKPacemaker(QueuePacemaker):
+    def __init__(self, agent, namespace, wait_time=60):
+        super(CKPacemaker, self).__init__(agent, namespace, wait_time)
+        self.cursor = agent.cursor
+        self.lock = agent.lock
+
+    def register_agent(self, agent_name):
+        with self.lock:
+            self.cursor.execute(f"""
+            INSERT INTO
+                {self.namespace}.system (agent)
+            VALUES
+                (%s)
+            RETURNING uid
+            """, (json.dumps(agent_name),))
+
+            self.agent_id = self.cursor.fetchone()[0]
+            return self.agent_id
+
+    def update_heartbeat(self):
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE 
+                {self.namespace}.system
+            SET 
+                heartbeat = current_timestamp()
+            WHERE
+                uid = %s
+            """, (self.agent_id,))
+
+    def register_message(self, message):
+        if message is None:
+            return None
+
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.system SET
+                message = %s
+            WHERE 
+                uid = %s
+            """, (message.uid, self.agent_id))
+
+            return message
+
+    def unregister_agent(self):
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.system SET
+                alive = false
+            WHERE 
+                uid = %s
+            """, (self.agent_id,))
 
 
 class CKMQClient(MessageQueue):
@@ -463,108 +488,65 @@ class CKMQClient(MessageQueue):
         self.agent_id = None
         self.namespace = namespace
         self.heartbeat_monitor = None
+        self.lock = RLock()
 
-    def __enter__(self):
-        self.agent_id = self._register_agent(self.name)
-        self.heartbeat_monitor = AgentMonitor(self, self.namespace, wait_time=60)
-        self.heartbeat_monitor.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.heartbeat_monitor.stop()
-        self._remove()
-
-    def _register_agent(self, agent_name):
-        self.cursor.execute(f"""
-        INSERT INTO
-            {self.namespace}.system (agent)
-        VALUES
-            (%s)
-        RETURNING uid
-        """, (json.dumps(agent_name),))
-
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
-
-    def _update_heartbeat(self):
-        self.cursor.execute(f"""
-        UPDATE {self.namespace}.qsystem SET
-            heartbeat = current_timestamp()
-        WHERE
-            uid = %s
-        """, (self.agent_id,))
-
-    def _remove(self):
-        self.cursor.execute(f"""
-        UPDATE {self.namespace}.system SET
-            alive = false
-        WHERE uid = %s""", (self.agent_id,))
+    def pacemaker(self, namespace, wait_time):
+        return CKPacemaker(self, namespace, wait_time)
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        self.cursor.execute(f"""
-        INSERT INTO  
-            {self.namespace}.{name} (mtype, read, actioned, message, replying_to)
-        VALUES
-            (%s, %s, %s, %s, %s)
-        RETURNING uid
-        """, (mtype, False, False, json.dumps(message), replying_to))
+        with self.lock:
+            self.cursor.execute(f"""
+            INSERT INTO  
+                {self.namespace}.{name} (mtype, read, actioned, message, replying_to)
+            VALUES
+                (%s, %s, %s, %s, %s)
+            RETURNING uid
+            """, (mtype, False, False, json.dumps(message), replying_to))
 
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return self.cursor.fetchone()[0]
+            return self.cursor.fetchone()[0]
 
     def dequeue(self, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.{name} SET 
+                (read, read_time) = (true, current_timestamp())
+            WHERE 
+                read = false
+            ORDER BY
+                time
+            LIMIT 1
+            RETURNING *
+            """)
 
-        self.cursor.execute(f"""
-        UPDATE {self.namespace}.{name} SET 
-            (read, read_time) = (true, current_timestamp())
-        WHERE 
-            read = false
-        ORDER BY
-            time
-        LIMIT 1
-        RETURNING *
-        """)
-
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return _parse(self.cursor.fetchone())
+            return self.heartbeat_monitor.register_message(_parse(self.cursor.fetchone()))
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-
         if isinstance(message, Message):
             uid = message.uid
 
-        self.cursor.execute(f"""
-        UPDATE {self.namespace}.{name} SET 
-            (actioned, actioned_time) = (true, current_timestamp())
-        WHERE 
-            uid = %s
-        RETURNING *
-        """, (uid,))
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.{name} SET 
+                (actioned, actioned_time) = (true, current_timestamp())
+            WHERE 
+                uid = %s
+            RETURNING *
+            """, (uid,))
 
-        if self.cursor.rowcount <= 0:
-            return None
-
-        return _parse(self.cursor.fetchone())
+            return _parse(self.cursor.fetchone())
 
     def get_reply(self, name, uid):
         return CKQueueMonitor(
-            cursor=self.cursor).get_reply(self.namespace, name, uid)
+            cursor=self.cursor, lock=self.lock).get_reply(self.namespace, name, uid)
 
 
 class CKQueueMonitor(QueueMonitor):
-    def __init__(self, uri=None, cursor=None):
+    def __init__(self, uri=None, cursor=None, lock=None):
         # When using this inside a dashbord it is executed in a multi threaded environment
         # You need to lock the cursor to not get some errors
-        self.lock = RLock()
 
         if cursor is None:
             uri = parse_uri(uri)
@@ -580,8 +562,10 @@ class CKQueueMonitor(QueueMonitor):
             )
             self.con.set_session(autocommit=True)
             self.cursor = self.con.cursor()
+            self.lock = RLock()
         else:
             self.cursor = cursor
+            self.lock = lock
 
     def _fetch_all(self):
         rows = self.cursor.fetchall()

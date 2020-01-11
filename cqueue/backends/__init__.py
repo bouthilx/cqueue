@@ -52,17 +52,20 @@ client_factory = {
     'cockroach': make_cockroach_client,
     'python': make_python_client,
     'mongodb': make_mongo_client,
+    'mongo': make_mongo_client,
 }
 
 broker_factory = {
     'cockroach': make_cockroach_server,
     'python': make_python_broker,
-    'mongodb': make_mongo_broker
+    'mongodb': make_mongo_broker,
+    'mongo': make_mongo_broker
 }
 
 monitor_factory = {
     'cockroach': make_cockroach_monitor,
-    'mongodb': make_mongo_monitor
+    'mongodb': make_mongo_monitor,
+    'mongo': make_mongo_monitor
 }
 
 
