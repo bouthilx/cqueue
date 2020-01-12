@@ -441,7 +441,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         msg = []
         for a in agents:
-            msg.append(a.message, a.queue)
+            msg.append((a.message, a.queue))
 
         return msg
 
@@ -452,5 +452,4 @@ class MongoQueueMonitor(QueueMonitor):
             'agent': ObjectId(agent),
             'ltype': ltype
         })
-        print(namespace, agent)
         return ''.join([l['line'] for l in lines])

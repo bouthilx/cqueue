@@ -844,7 +844,7 @@ class CKQueueMonitor(QueueMonitor):
 
         msg = []
         for a in agents:
-            msg.append(a.message, a.queue)
+            msg.append((a.message, a.queue))
 
         return msg
 

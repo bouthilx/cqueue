@@ -54,7 +54,7 @@ class BaseWorker:
     def push_result(self, result, mtype=RESULT_ITEM, replying_to=None):
         return self.client.push(self.result_queue, message=result, mtype=mtype, replying_to=replying_to)
 
-    def run(self, stop_when_empty=False):
+    def run(self):
         info('starting worker')
 
         self.running = True
@@ -67,10 +67,7 @@ class BaseWorker:
 
                 # wait for more work to come through
                 if workitem is None:
-                    if stop_when_empty:
-                        return
-                    else:
-                        time.sleep(0.01)
+                    time.sleep(0.01)
                     continue
 
                 handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
