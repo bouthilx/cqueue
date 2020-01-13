@@ -20,25 +20,22 @@ def fetch_factories(base_module, base_file_name, function_name):
         if module_file == base_file_name:
             continue
 
-        import_error = None
         module_name = module_file.split(".py")[0]
 
         try:
             module = __import__(".".join([base_module, module_name]), fromlist=[''])
+
+            if hasattr(module, function_name):
+                builders = getattr(module, function_name)
+
+                if not isinstance(builders, dict):
+                    builders = {module_name: builders}
+
+                for key, builder in builders.items():
+                    factories[key] = builder
+
         except ImportError as e:
-            import_error = e
-
-        if hasattr(module, function_name):
-            builders = getattr(module, function_name)
-
-            if not isinstance(builders, dict):
-                builders = {module_name: builders}
-
-            for key, builder in builders.items():
-                factories[key] = builder
-
-        elif import_error is not None:
-            factories[module_name] = make_delayed_import_error(import_error)
+            factories[module_name] = make_delayed_import_error(e)
 
     return factories
 
@@ -66,6 +63,10 @@ def new_client(uri, *args, **kwargs):
 def new_monitor(uri, *args, **kwargs):
     options = parse_uri(uri)
     return monitor_factory.get(options.get('scheme'))(uri, *args, **kwargs)
+
+
+def main(name):
+    return main_factory[name]()
 
 
 def get_main_script():

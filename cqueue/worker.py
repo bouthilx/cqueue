@@ -3,7 +3,7 @@ import time
 from typing import Dict
 
 from cqueue.logs import error, info, warning
-from cqueue.backends import make_message_client
+from cqueue.backends import new_client
 from cqueue.backends.queue import MessageQueue, Message
 
 WORK_QUEUE = 'work'
@@ -21,7 +21,7 @@ class BaseWorker:
     def __init__(self, queue_uri, namespace, worker_id, work_queue, result_queue=None):
         self.uri = queue_uri
         self.namespace = namespace
-        self.client: MessageQueue = make_message_client(queue_uri, namespace)
+        self.client: MessageQueue = new_client(queue_uri, namespace)
         self.running = False
         self.work_id = worker_id
         self.broker = None
