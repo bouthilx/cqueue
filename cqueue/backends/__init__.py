@@ -1,85 +1,69 @@
+from glob import glob
+import os
+
 from cqueue.logs import info
 from cqueue.uri import parse_uri
 
 
-def make_cockroach_server(uri, *args, **kwargs):
-    from cqueue.backends.cockroachdb import CockRoachDB
-    data = parse_uri(uri)
-
-    return CockRoachDB(
-        location='/tmp/cockroach/queue',
-        addrs=f'{data.get("address")}:{data.get("port")}'
-    )
+def make_delayed_import_error(error):
+    def raise_import_error():
+        raise error
+    return raise_import_error()
 
 
-def make_cockroach_client(uri, *args, **kwargs):
-    from cqueue.backends.cockroachdb import CKMQClient
-    return CKMQClient(uri, *args, **kwargs)
+def fetch_factories(base_module, base_file_name, function_name):
+    factories = {}
+    module_path = os.path.dirname(os.path.abspath(base_file_name))
+    for module_path in glob(os.path.join(module_path, '[A-Za-z]*')):
+        module_file = module_path.split(os.sep)[-1]
+
+        if module_file == base_file_name:
+            continue
+
+        import_error = None
+        module_name = module_file.split(".py")[0]
+
+        try:
+            module = __import__(".".join([base_module, module_name]), fromlist=[''])
+        except ImportError as e:
+            import_error = e
+
+        if hasattr(module, function_name):
+            builders = getattr(module, function_name)
+
+            if not isinstance(builders, dict):
+                builders = {module_name: builders}
+
+            for key, builder in builders.items():
+                factories[key] = builder
+
+        elif import_error is not None:
+            factories[module_name] = make_delayed_import_error(import_error)
+
+    return factories
 
 
-def make_python_client(uri, *args, **kwargs):
-    from cqueue.backends.pyqueue import PythonQueue
-    return PythonQueue()
+client_factory = fetch_factories('cqueue.backends', __file__, 'new_client')
+broker_factory = fetch_factories('cqueue.backends', __file__, 'new_server')
+monitor_factory = fetch_factories('cqueue.backends', __file__, 'new_monitor')
+main_factory = fetch_factories('cqueue.backends', __file__, 'start_server_main')
 
 
-def make_python_broker(uri, *args, **kwargs):
-    from cqueue.backends.pyqueue import PythonBroker
-    return PythonBroker()
+def known_backends():
+    return list(client_factory.keys())
 
 
-def make_mongo_client(uri, *args, **kwargs):
-    from cqueue.backends.mongodb import MongoClient
-    return MongoClient(uri, *args, **kwargs)
-
-
-def make_mongo_broker(uri, *args, **kwargs):
-    from cqueue.backends.mongodb import MongoDB
-    options = parse_uri(uri)
-    return MongoDB(options['address'], port=int(options['port']), location='/tmp/mongo')
-
-
-def make_cockroach_monitor(uri, *args, **kwargs):
-    from cqueue.backends.cockroachdb import CKQueueMonitor
-    return CKQueueMonitor(uri, *args, **kwargs)
-
-
-def make_mongo_monitor(uri, *args, **kwargs):
-    from cqueue.backends.mongodb import MongoQueueMonitor
-    return MongoQueueMonitor(uri, *args, **kwargs)
-
-
-client_factory = {
-    'cockroach': make_cockroach_client,
-    'python': make_python_client,
-    'mongodb': make_mongo_client,
-    'mongo': make_mongo_client,
-}
-
-broker_factory = {
-    'cockroach': make_cockroach_server,
-    'python': make_python_broker,
-    'mongodb': make_mongo_broker,
-    'mongo': make_mongo_broker
-}
-
-monitor_factory = {
-    'cockroach': make_cockroach_monitor,
-    'mongodb': make_mongo_monitor,
-    'mongo': make_mongo_monitor
-}
-
-
-def make_message_broker(uri, *args, **kwargs):
+def new_server(uri, *args, **kwargs):
     options = parse_uri(uri)
     return broker_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 
 
-def make_message_client(uri, *args, **kwargs):
+def new_client(uri, *args, **kwargs):
     options = parse_uri(uri)
     return client_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 
 
-def make_message_monitor(uri, *args, **kwargs):
+def new_monitor(uri, *args, **kwargs):
     options = parse_uri(uri)
     return monitor_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 
