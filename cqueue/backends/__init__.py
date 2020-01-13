@@ -55,9 +55,9 @@ def new_server(uri, *args, **kwargs):
     return broker_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 
 
-def new_client(uri, *args, **kwargs):
+def new_client(uri, namespace, name='worker', log_capture=True, timeout=60):
     options = parse_uri(uri)
-    return client_factory.get(options.get('scheme'))(uri, *args, **kwargs)
+    return client_factory.get(options.get('scheme'))(uri, namespace, name, log_capture, timeout)
 
 
 def new_monitor(uri, *args, **kwargs):

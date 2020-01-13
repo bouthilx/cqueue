@@ -75,15 +75,15 @@ class MongoClient(MessageQueue):
         mongodb://192.168.0.10:8123
     """
 
-    def __init__(self, uri, namespace, name='worker'):
+    def __init__(self, uri, namespace, name='worker', log_capture=True, timeout=60):
         uri = parse_uri(uri)
         self.name = name
         self.namespace = namespace
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
         self.heartbeat_monitor = None
 
-        self.capture = True
-        self.timeout = 60
+        self.capture = log_capture
+        self.timeout = timeout
 
     def pacemaker(self, namespace, wait_time, capture):
         return MongoQueuePacemaker(self, namespace, wait_time, capture)

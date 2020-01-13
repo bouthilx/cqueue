@@ -92,7 +92,7 @@ class CKMQClient(MessageQueue):
         cockroach://192.168.0.10:8123
     """
 
-    def __init__(self, uri, namespace, name=None):
+    def __init__(self, uri, namespace, name='worker', log_capture=True, timeout=60):
         uri = parse_uri(uri)
 
         self.con = psycopg2.connect(
@@ -113,8 +113,8 @@ class CKMQClient(MessageQueue):
         self.heartbeat_monitor = None
         self.lock = RLock()
 
-        self.capture = True
-        self.timeout = 60
+        self.capture = log_capture
+        self.timeout = timeout
 
     def pacemaker(self, namespace, wait_time, capture):
         return CKPacemaker(self, namespace, wait_time, capture)

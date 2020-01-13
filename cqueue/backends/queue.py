@@ -220,6 +220,9 @@ class QueueMonitor:
     def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
         raise NotImplementedError()
 
+    def requeue_message(self, namespace, message):
+        raise NotImplementedError()
+
     def get_log(self, namespace, agent, ltype=0):
         raise NotImplementedError()
 
