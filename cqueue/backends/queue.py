@@ -214,13 +214,13 @@ class QueueMonitor:
     def agents(self, namespace):
         raise NotImplementedError()
 
-    def fetch_dead_agent(self, namespace, timeout_s=60):
+    def fetch_dead_agents(self, namespace, timeout_s=60):
         raise NotImplementedError()
 
-    def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
+    def fetch_lost_messages(self, namespace, timeout_s=60):
         raise NotImplementedError()
 
-    def requeue_message(self, namespace, message):
+    def requeue_messages(self, namespace, message):
         raise NotImplementedError()
 
     def get_log(self, namespace, agent, ltype=0):

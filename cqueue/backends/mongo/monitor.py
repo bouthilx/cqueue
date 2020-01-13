@@ -100,7 +100,7 @@ class MongoQueueMonitor(QueueMonitor):
     def fetch_dead_agent(self, namespace, timeout_s=60):
         agents = self.client[namespace].system.find({
             'heartbeat': {
-                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s, granularity='seconds')
+                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
             },
             'alive': {
                 '$eq': True
@@ -109,7 +109,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         return [_parse_agent(agent) for agent in agents]
 
-    def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
+    def fetch_lost_messages(self, namespace, timeout_s=60):
         agents = self.client[namespace].system.find({
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
@@ -119,22 +119,23 @@ class MongoQueueMonitor(QueueMonitor):
             }
         })
 
-        if reset_messages:
-            for a in agents:
-                self.client[namespace][a.queue].update({
-                    '_id': a.message,
-                    'read': True,
-                    'actioned': False
-                }, {
-                    'read': {'$set': False},
-                    'read_time': {'$set': None}
-                })
-
         msg = []
         for a in agents:
-            msg.append((a.message, a.queue))
+            msg.append((a.queue, a.message))
 
         return msg
+
+    def requeue_messages(self, namespace, timeout_s):
+        lost = self.fetch_lost_messages(namespace, timeout_s)
+        for queue, message in lost:
+            self.client[namespace][queue].update({
+                '_id': message.uid,
+                'read': True,
+                'actioned': False
+            }, {
+                'read': {'$set': False},
+                'read_time': {'$set': None}
+            })
 
     def get_log(self, namespace, agent, ltype=0):
         from bson import ObjectId

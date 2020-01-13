@@ -64,11 +64,11 @@ Detect errors & Inspect logs
     # get messages that were assigned to a currently dead worker & that have not finished
     dead_messages = monitor.fetch_lost_messages('task')
 
-    # Requeue a message that did not finish
-    monitor.requeue_message(dead_messages[0])
+    # Requeue all messages that did not finish
+    monitor.requeue_messages()
 
     # get unresponsive worker entries
-    dead_workers = monitor.fetch_dead_agent('task')
+    dead_workers = monitor.fetch_dead_agents('task')
 
     # Get logs of the dead worker
     log = monitor.get_log('task', dead_workers[0])

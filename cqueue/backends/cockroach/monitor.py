@@ -2,7 +2,7 @@ import psycopg2
 from threading import RLock
 
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import QueueMonitor
+from cqueue.backends.queue import QueueMonitor, Agent, Message
 
 from .util import _parse, _parse_agent
 
@@ -217,7 +217,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
 
-    def fetch_dead_agent(self, namespace, timeout_s=60):
+    def fetch_dead_agents(self, namespace, timeout_s=60):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
@@ -229,9 +229,9 @@ class CKQueueMonitor(QueueMonitor):
                 current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
             """)
 
-        return [_parse_agent(agent) for agent in self.cursor.fetchall()]
+            return [_parse_agent(agent) for agent in self.cursor.fetchall()]
 
-    def fetch_lost_messages(self, namespace, timeout_s=60, reset_messages=False):
+    def fetch_lost_messages(self, namespace, timeout_s=60):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
@@ -243,19 +243,7 @@ class CKQueueMonitor(QueueMonitor):
                 current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
             """)
 
-        agents = [_parse_agent(agent) for agent in self.cursor.fetchall()]
-
-        if reset_messages:
-            for a in agents:
-                self.cursor.execute(f"""
-                UPDATE {namespace}.{a.queue}
-                SET 
-                    (read, read_time) = (false, null)
-                WHERE 
-                    uid = {a.message} AND
-                    read = true       AND
-                    actioned = false
-                """)
+            agents = [_parse_agent(agent) for agent in self.cursor.fetchall()]
 
         msg = []
         for a in agents:
@@ -263,7 +251,25 @@ class CKQueueMonitor(QueueMonitor):
 
         return msg
 
+    def requeue_messages(self, namespace, timeout_s=60):
+        lost = self.fetch_lost_messages(namespace, timeout_s)
+
+        with self.lock:
+            for queue, message in lost:
+                self.cursor.execute(f"""
+                UPDATE {namespace}.{queue}
+                SET 
+                    (read, read_time) = (false, null)
+                WHERE 
+                    uid = %s AND
+                    read = true       AND
+                    actioned = false
+                """, (message.uid,))
+
     def get_log(self, namespace, agent, ltype=0):
+        if isinstance(agent, Agent):
+            agent = agent.uid
+
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
