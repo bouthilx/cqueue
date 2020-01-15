@@ -93,7 +93,7 @@ class MongoClient(MessageQueue):
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        if (self.namespace, name) not in self.monitor().get_namespaces():
+        if not self._queue_exist(name):
             new_queue(self.client, self.namespace, name)
 
         return self.client[self.namespace][name].insert_one({
@@ -141,11 +141,11 @@ class MongoClient(MessageQueue):
         self._unregister_message(uid)
         return message
 
-    def get_reply(self, name, uid):
+    def reply(self, name, uid):
         if isinstance(uid, Message):
             uid = uid.uid
 
-        return self.monitor().get_reply(self.namespace, name, uid)
+        return self.monitor().reply(self.namespace, name, uid)
 
     def monitor(self):
         from .monitor import MongoQueueMonitor

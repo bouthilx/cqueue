@@ -129,8 +129,8 @@ class CKMQClient(MessageQueue):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         with self.lock:
             # need to be root to create database :/
-            if (self.namespace, name) not in self.monitor().get_namespaces():
-                new_queue(self.cursor, self.username, self.namespace, name)
+            if not self._queue_exist(name):
+                new_queue(self.cursor, 'root', self.namespace, name)
 
             self.cursor.execute(f"""
             INSERT INTO  
@@ -189,8 +189,8 @@ class CKMQClient(MessageQueue):
             self._unregister_message(uid)
             return message
 
-    def get_reply(self, name, uid):
-        return self.monitor().get_reply(self.namespace, name, uid)
+    def reply(self, name, uid):
+        return self.monitor().reply(self.namespace, name, uid)
 
     def monitor(self):
         from .monitor import CKQueueMonitor

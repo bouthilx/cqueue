@@ -65,7 +65,9 @@ def test_pop_client(backend):
         client.push('testing_queue', result_item, RESULT_ITEM)
 
         with client:
-            names = env.monitor.get_namespaces()[0]
+            name = env.monitor.namespaces()[0]
+            queue = env.monitor.queues(name)[0]
+            names = (name, queue)
             assert names == (env.namespace, 'testing_queue')
 
             msg = client.pop('testing_queue')
@@ -86,13 +88,13 @@ def test_pop_client(backend):
         # for coverage sake check the queries work
         agents = env.monitor.agents(env.namespace)
         print(agents)
-        print(env.monitor.fetch_lost_messages(env.namespace))
-        print(env.monitor.fetch_dead_agents(env.namespace))
-        print(env.monitor.get_log(env.namespace, agents[0]), end='')
+        print(env.monitor.lost_messages(env.namespace))
+        print(env.monitor.dead_agents(env.namespace))
+        print(env.monitor.log(env.namespace, agents[0]), end='')
         print(env.monitor.requeue_messages(env.namespace))
-        print(env.monitor.get_all_messages(*names))
-        print(env.monitor.get_unread_messages(*names))
-        print(env.monitor.get_unactioned_messages(*names))
+        print(env.monitor.messages(*names))
+        print(env.monitor.unread_messages(*names))
+        print(env.monitor.unactioned_messages(*names))
 
 
 @pytest.mark.parametrize('backend', backends)

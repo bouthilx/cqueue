@@ -20,28 +20,32 @@ class MongoQueueMonitor(QueueMonitor):
         else:
             self.client = cursor
 
-    def get_namespaces(self):
+    def namespaces(self):
         with self.lock:
-            return [(n['namespace'], n['name']) for n in self.client.qsystem.namespaces.find({})]
+            return list(n['namespace'] for n in self.client.qsystem.namespaces.find({}))
 
-    def get_reply(self, namespace, name, uid):
+    def queues(self, namespace):
+        with self.lock:
+            return list(n['name'] for n in self.client.qsystem.namespaces.find({'namespace': namespace}))
+
+    def reply(self, namespace, name, uid):
         with self.lock:
             msg = self.client[namespace][name].find_one(
                 {'replying_to': uid},
             )
             return _parse(msg)
 
-    def get_all_messages(self, namespace, name, limit=100):
+    def messages(self, namespace, name, limit=100):
         with self.lock:
             return [
                 _parse(msg) for msg in self.client[namespace][name].find({})]
 
-    def get_unread_messages(self, namespace, name):
+    def unread_messages(self, namespace, name):
         with self.lock:
             return [
                 _parse(msg) for msg in self.client[namespace][name].find({'read': False})]
 
-    def get_unactioned_messages(self, namespace, name):
+    def unactioned_messages(self, namespace, name):
         with self.lock:
             return [
                 _parse(msg) for msg in self.client[namespace][name].find({'actioned': False, 'read': True})]
@@ -82,7 +86,7 @@ class MongoQueueMonitor(QueueMonitor):
 
             return items
 
-    def get_unactioned(self, namespace, name):
+    def unactioned(self, namespace, name):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         with self.lock:
             return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
@@ -97,7 +101,7 @@ class MongoQueueMonitor(QueueMonitor):
             agents = self.client[namespace].system.find()
             return [_parse_agent(agent) for agent in agents]
 
-    def fetch_dead_agents(self, namespace, timeout_s=60):
+    def dead_agents(self, namespace, timeout_s=60):
         agents = self.client[namespace].system.find({
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
@@ -109,7 +113,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         return [_parse_agent(agent) for agent in agents]
 
-    def fetch_lost_messages(self, namespace, timeout_s=60):
+    def lost_messages(self, namespace, timeout_s=60):
         agents = self.client[namespace].system.find({
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
@@ -126,7 +130,7 @@ class MongoQueueMonitor(QueueMonitor):
         return msg
 
     def requeue_messages(self, namespace, timeout_s=60):
-        lost = self.fetch_lost_messages(namespace, timeout_s)
+        lost = self.lost_messages(namespace, timeout_s)
         for queue, message in lost:
             self.client[namespace][queue].update({
                 '_id': message.uid,
@@ -137,7 +141,7 @@ class MongoQueueMonitor(QueueMonitor):
                 'read_time': {'$set': None}
             })
 
-    def get_log(self, namespace, agent, ltype=0):
+    def log(self, namespace, agent, ltype=0):
         from bson import ObjectId
         if isinstance(agent, Agent):
             agent = agent.uid

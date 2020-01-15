@@ -203,18 +203,27 @@ class MessageQueue:
         if self.heartbeat_monitor:
             return self.heartbeat_monitor.unregister_message(uid)
 
+    def _queue_exist(self, queue):
+        return self.namespace in self.monitor().namespaces() and queue in self.monitor().queues(self.namespace)
+
 
 class QueueMonitor:
-    def get_namespaces(self):
+    def namespaces(self):
         raise NotImplementedError()
 
-    def get_all_messages(self, namespace, name, limit=100):
+    def queues(self, namespace):
         raise NotImplementedError()
 
-    def get_unread_messages(self, namespace, name):
+    def agents(self, namespace):
         raise NotImplementedError()
 
-    def get_unactioned_messages(self, namespace, name):
+    def messages(self, namespace, name, limit=100):
+        raise NotImplementedError()
+
+    def unread_messages(self, namespace, name):
+        raise NotImplementedError()
+
+    def unactioned_messages(self, namespace, name):
         raise NotImplementedError()
 
     def unread_count(self, namespace, name):
@@ -232,18 +241,18 @@ class QueueMonitor:
     def reset_queue(self, namespace, name):
         raise NotImplementedError()
 
-    def agents(self, namespace):
+    def dead_agents(self, namespace, timeout_s=60):
         raise NotImplementedError()
 
-    def fetch_dead_agents(self, namespace, timeout_s=60):
-        raise NotImplementedError()
-
-    def fetch_lost_messages(self, namespace, timeout_s=60):
+    def lost_messages(self, namespace, timeout_s=60):
         raise NotImplementedError()
 
     def requeue_messages(self, namespace):
         raise NotImplementedError()
 
-    def get_log(self, namespace, agent: Union[Agent, int], ltype: int = 0):
+    def log(self, namespace, agent: Union[Agent, int], ltype: int = 0):
         raise NotImplementedError()
+
+    def reply(self, namespace, name, uid):
+        raise NotImplementedError
 

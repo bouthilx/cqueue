@@ -3,7 +3,7 @@ import time
 
 def check_reply_fun(client, result_queue, message_id):
     def check_ready():
-        return client.get_reply(result_queue, message_id)
+        return client.reply(result_queue, message_id)
     return check_ready
 
 

@@ -46,15 +46,28 @@ class CKQueueMonitor(QueueMonitor):
         for row in rows:
             print(_parse(row))
 
-    def get_namespaces(self):
+    def namespaces(self):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
-                *
+                namespace
             FROM qsystem.namespaces;
             """)
 
-            return [(n[0], n[1]) for n in self.cursor.fetchall()]
+            return [n[0] for n in self.cursor.fetchall()]
+
+    def queues(self, namespace):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT
+                name
+            FROM qsystem.namespaces
+            WHERE
+                namespace = %s
+            ;
+            """, (namespace,))
+
+            return [n[0] for n in self.cursor.fetchall()]
 
     def archive_namespace(self, namespace):
         # TODO create partition per namespace
@@ -84,7 +97,7 @@ class CKQueueMonitor(QueueMonitor):
         DROP DATABASE IF EXISTS {namespace}
         """)
 
-    def get_all_messages(self, namespace, name, limit=100):
+    def messages(self, namespace, name, limit=100):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
@@ -96,7 +109,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return self._fetch_all()
 
-    def get_unread_messages(self, namespace, name):
+    def unread_messages(self, namespace, name):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
@@ -109,7 +122,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return self._fetch_all()
 
-    def get_unactioned_messages(self, namespace, name):
+    def unactioned_messages(self, namespace, name):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
@@ -194,7 +207,10 @@ class CKQueueMonitor(QueueMonitor):
 
             return records
 
-    def get_reply(self, namespace, name, uid):
+    def reply(self, namespace, name, uid):
+        if isinstance(uid, Message):
+            uid = uid.uid
+
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
@@ -218,7 +234,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
 
-    def fetch_dead_agents(self, namespace, timeout_s=60):
+    def dead_agents(self, namespace, timeout_s=60):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
@@ -232,7 +248,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return [_parse_agent(agent) for agent in self.cursor.fetchall()]
 
-    def fetch_lost_messages(self, namespace, timeout_s=60):
+    def lost_messages(self, namespace, timeout_s=60):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
@@ -253,7 +269,7 @@ class CKQueueMonitor(QueueMonitor):
         return msg
 
     def requeue_messages(self, namespace, timeout_s=60):
-        lost = self.fetch_lost_messages(namespace, timeout_s)
+        lost = self.lost_messages(namespace, timeout_s)
 
         with self.lock:
             for queue, message in lost:
@@ -267,7 +283,7 @@ class CKQueueMonitor(QueueMonitor):
                     actioned = false
                 """, (message.uid,))
 
-    def get_log(self, namespace, agent, ltype=0):
+    def log(self, namespace, agent, ltype=0):
         if isinstance(agent, Agent):
             agent = agent.uid
 
