@@ -1,3 +1,5 @@
+travis: travis-unit travis-end
+
 travis-install:
 	pip install -e .
 	pip install -r requirements.txt
