@@ -57,7 +57,7 @@ class MongoQueuePacemaker(QueuePacemaker):
         })
 
     def insert_log_line(self, line, ltype=0):
-        if self.agent_id is None:
+        if self.agent_id is None or self.client is None:
             return
 
         self.client[self.namespace].logs.insert_one({
@@ -82,9 +82,11 @@ class MongoClient(MessageQueue):
         self.namespace = namespace
         self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
         self.heartbeat_monitor = None
-
         self.capture = log_capture
         self.timeout = timeout
+
+    def join(self):
+        return self.heartbeat_monitor.join()
 
     def pacemaker(self, namespace, wait_time, capture):
         return MongoQueuePacemaker(self, namespace, wait_time, capture)
@@ -92,7 +94,6 @@ class MongoClient(MessageQueue):
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         if (self.namespace, name) not in self.monitor().get_namespaces():
-            print('new_quee')
             new_queue(self.client, self.namespace, name)
 
         return self.client[self.namespace][name].insert_one({

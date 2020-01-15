@@ -133,6 +133,7 @@ class MessageQueue:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.heartbeat_monitor.stop()
         self.heartbeat_monitor.unregister_agent()
+        self.heartbeat_monitor.client = None
 
     def join(self):
         return self.heartbeat_monitor.join()

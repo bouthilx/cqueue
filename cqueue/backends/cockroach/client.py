@@ -10,13 +10,13 @@ from .util import _parse
 
 class CKPacemaker(QueuePacemaker):
     def __init__(self, agent, namespace, wait_time, capture):
-        self.cursor = agent.cursor
+        self.client = agent.cursor
         self.lock = agent.lock
         super(CKPacemaker, self).__init__(agent, namespace, wait_time, capture)
 
     def register_agent(self, agent_name):
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             INSERT INTO
                 {self.namespace}.system (agent)
             VALUES
@@ -24,12 +24,12 @@ class CKPacemaker(QueuePacemaker):
             RETURNING uid
             """, (json.dumps(agent_name),))
 
-            self.agent_id = self.cursor.fetchone()[0]
+            self.agent_id = self.client.fetchone()[0]
             return self.agent_id
 
     def update_heartbeat(self):
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             UPDATE 
                 {self.namespace}.system
             SET 
@@ -43,7 +43,7 @@ class CKPacemaker(QueuePacemaker):
             return None
 
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             UPDATE {self.namespace}.system SET
                 message = %s,
                 queue = %s
@@ -55,7 +55,7 @@ class CKPacemaker(QueuePacemaker):
 
     def unregister_message(self, uid):
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             UPDATE {self.namespace}.system SET
                 message = NULL
             WHERE 
@@ -65,7 +65,7 @@ class CKPacemaker(QueuePacemaker):
 
     def unregister_agent(self):
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             UPDATE {self.namespace}.system SET
                 alive = false
             WHERE 
@@ -77,7 +77,7 @@ class CKPacemaker(QueuePacemaker):
             return
 
         with self.lock:
-            self.cursor.execute(f"""
+            self.client.execute(f"""
             INSERT INTO {self.namespace}.logs (agent, ltype, line)
             VALUES
                 (%s, %s, %s)
@@ -117,6 +117,10 @@ class CKMQClient(MessageQueue):
 
         self.capture = log_capture
         self.timeout = timeout
+
+    def join(self):
+        self.con.close()
+        return self.heartbeat_monitor.join()
 
     def pacemaker(self, namespace, wait_time, capture):
         return CKPacemaker(self, namespace, wait_time, capture)

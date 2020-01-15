@@ -3,7 +3,7 @@ import pymongo
 from threading import RLock
 
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import QueueMonitor
+from cqueue.backends.queue import QueueMonitor, Agent
 
 from .util import _parse, _parse_agent
 
@@ -52,7 +52,7 @@ class MongoQueueMonitor(QueueMonitor):
 
     def unactioned_count(self, namespace, name):
         with self.lock:
-            return self.client[namespace][name].count({'actioned': False})
+            return self.client[namespace][name].count({'actioned': False, 'read': True})
 
     def read_count(self, namespace, name):
         with self.lock:
@@ -97,7 +97,7 @@ class MongoQueueMonitor(QueueMonitor):
             agents = self.client[namespace].system.find()
             return [_parse_agent(agent) for agent in agents]
 
-    def fetch_dead_agent(self, namespace, timeout_s=60):
+    def fetch_dead_agents(self, namespace, timeout_s=60):
         agents = self.client[namespace].system.find({
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
@@ -125,7 +125,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_messages(self, namespace, timeout_s):
+    def requeue_messages(self, namespace, timeout_s=60):
         lost = self.fetch_lost_messages(namespace, timeout_s)
         for queue, message in lost:
             self.client[namespace][queue].update({
@@ -139,6 +139,8 @@ class MongoQueueMonitor(QueueMonitor):
 
     def get_log(self, namespace, agent, ltype=0):
         from bson import ObjectId
+        if isinstance(agent, Agent):
+            agent = agent.uid
 
         lines = self.client[namespace].logs.find({
             'agent': ObjectId(agent),

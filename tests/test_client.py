@@ -35,6 +35,7 @@ class TestEnvironment:
         self.server = new_server(uri=self.uri)
         self.server.start(wait=True)
         self.client = new_client(self.uri, self.namespace, 'client-test')
+        self.monitor = self.client.monitor()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -63,9 +64,35 @@ def test_pop_client(backend):
         client.push('testing_queue', nothing_item, 0)
         client.push('testing_queue', result_item, RESULT_ITEM)
 
-        msg = client.pop('testing_queue')
-        client.mark_actioned('testing_queue', msg)
-        assert msg.message == work_item, 'work_item was inserted first it needs to be first out'
+        with client:
+            names = env.monitor.get_namespaces()[0]
+            assert names == (env.namespace, 'testing_queue')
+
+            msg = client.pop('testing_queue')
+
+            print('log to capture')
+
+            assert env.monitor.read_count(*names) == 1
+            assert env.monitor.unactioned_count(*names) == 1
+
+            client.mark_actioned('testing_queue', msg)
+
+            assert env.monitor.unactioned_count(*names) == 0
+
+            assert msg.message == work_item, 'work_item was inserted first it needs to be first out'
+            assert env.monitor.unread_count(*names) == 2
+
+        time.sleep(1)
+        # for coverage sake check the queries work
+        agents = env.monitor.agents(env.namespace)
+        print(agents)
+        print(env.monitor.fetch_lost_messages(env.namespace))
+        print(env.monitor.fetch_dead_agents(env.namespace))
+        print(env.monitor.get_log(env.namespace, agents[0]), end='')
+        print(env.monitor.requeue_messages(env.namespace))
+        print(env.monitor.get_all_messages(*names))
+        print(env.monitor.get_unread_messages(*names))
+        print(env.monitor.get_unactioned_messages(*names))
 
 
 @pytest.mark.parametrize('backend', backends)
@@ -107,10 +134,7 @@ if __name__ == '__main__':
     for b in reversed(backends):
         try:
             print(b)
-            test_pop_empty_client(b)
             test_pop_client(b)
-            test_mtype_pop_client(b)
-            test_union_pop_client(b)
             print('--')
         except:
             print(traceback.format_exc())

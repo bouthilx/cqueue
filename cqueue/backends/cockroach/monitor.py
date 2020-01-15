@@ -144,6 +144,7 @@ class CKQueueMonitor(QueueMonitor):
             FROM 
                 {namespace}.{name}
             WHERE 
+                read = true AND
                 actioned = false
             """)
 
