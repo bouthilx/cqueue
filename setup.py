@@ -6,7 +6,15 @@ import os
 
 if __name__ == '__main__':
     _base = os.path.dirname(os.path.realpath(__file__))
-    subprocess.call(f'./{_base}/install_cockroach.sh.sh', shell=True)
+    data = []
+
+    subprocess.call(f'./{_base}/install_cockroach.sh', shell=True)
+    cockroach_path = f'{_base}/msgqueue/backends/cockroach/bin/cockroach'
+
+    if os.path.exists(cockroach_path):
+        data = [('msgqueue', [cockroach_path])]
+    else:
+        print('cockroach db is not going to be installed')
 
     setup(
         name='msgqueue',
@@ -21,9 +29,7 @@ if __name__ == '__main__':
             'dataclasses',
             'typing',
         ],
-        data_files=[
-            ('msgqueue', ['backends/cockroach/bin/cockroach'])
-        ],
+        data_files=data,
         setup_requires=['setuptools'],
         tests_require=['pytest', 'flake8', 'codecov', 'pytest-cov'],
     )

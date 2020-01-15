@@ -2,7 +2,7 @@
 
 SCRIPT_PATH=$(dirname "$0")
 
-mkdir -p $SCRIPT_PATH/msgqueue/backends/bin
+mkdir -p $SCRIPT_PATH/msgqueue/backends/cockroach/bin
 
 wget -qO- https://binaries.cockroachdb.com/cockroach-v19.2.2.linux-amd64.tgz | tar  xvz
 
