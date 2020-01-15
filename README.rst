@@ -62,22 +62,22 @@ Detect errors & Inspect logs
     monitor = new_monitor(uri='cockroach://192.168.0.10:8123')
 
     # get messages that were assigned to a currently dead worker & that have not finished
-    dead_messages = monitor.fetch_lost_messages('task')
+    dead_messages = monitor.lost_messages('task')
 
     # Requeue all messages that did not finish
     monitor.requeue_messages()
 
     # get unresponsive worker entries
-    dead_workers = monitor.fetch_dead_agents('task')
+    dead_workers = monitor.dead_agents('task')
 
     # Get logs of the dead worker
-    log = monitor.get_log('task', dead_workers[0])
+    log = monitor.log('task', dead_workers[0])
 
     print(log)
 
     # Get all messages (read & unread) from the `task` namespace and the `work` queue
     # For analysis
-    messages = monitor.get_all_messages('task', 'work')
+    messages = monitor.messages('task', 'work')
     for msg in messages:
         print(
         m.read,             # Was the message read
