@@ -8,6 +8,7 @@ python:
 before_install:
   - sudo apt-get update
   - sudo apt-get install -y mongodb-server
+  - ./install_cockroach.sh
 
 install:
   - make travis-install
