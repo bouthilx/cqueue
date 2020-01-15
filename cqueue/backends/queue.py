@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 import threading
+from typing import Union, List
 
 
 @dataclass
@@ -145,7 +146,7 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def dequeue(self, name):
+    def dequeue(self, name, mtype: Union[int, List[int]] = None):
         """Remove oldest message from the queue i.e mark is as read
 
         Parameters
@@ -153,10 +154,12 @@ class MessageQueue:
         name: str
             Queue namespace to pop message from
 
+        mtype: Union[int, List[int]
+            type of message to look for (default: none)
         """
         raise NotImplementedError()
 
-    def mark_actioned(self, name, message: Message = None, uid: int = None):
+    def mark_actioned(self, name, message: Union[Message, int]):
         """Mark a message as actioned
 
         Parameters
@@ -164,11 +167,8 @@ class MessageQueue:
         name: str
             Message queue namespace
 
-        message: Optional[str]
-            message object to update
-
-        uid: Optional[int]
-            uid of the message to update
+        message: Union[Message, int]
+            message object to update or uid of the message
 
         """
         raise NotImplementedError()
@@ -176,11 +176,21 @@ class MessageQueue:
     def push(self, name, message, mtype=0, replying_to=None):
         return self.enqueue(name, message, mtype, replying_to)
 
-    def pop(self, name):
-        return self.dequeue(name)
+    def pop(self, name, mtype: Union[int, List[int]] = None):
+        return self.dequeue(name, mtype)
 
-    def get_reply(self, name):
+    def get_reply(self, name, message: Union[int, List[int]]):
         raise NotImplementedError()
+
+    def _register_message(self, name, msg):
+        if self.heartbeat_monitor:
+            return self.heartbeat_monitor.register_message(name, msg)
+
+        return msg
+
+    def _unregister_message(self, name, uid):
+        if self.heartbeat_monitor:
+            return self.heartbeat_monitor.unregister_message(name, uid)
 
 
 class QueueMonitor:
@@ -220,9 +230,9 @@ class QueueMonitor:
     def fetch_lost_messages(self, namespace, timeout_s=60):
         raise NotImplementedError()
 
-    def requeue_messages(self, namespace, message):
+    def requeue_messages(self, namespace):
         raise NotImplementedError()
 
-    def get_log(self, namespace, agent, ltype=0):
+    def get_log(self, namespace, agent: Union[Agent, int], ltype: int = 0):
         raise NotImplementedError()
 

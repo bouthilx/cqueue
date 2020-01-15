@@ -1,18 +1,15 @@
 import os
-import json
-import psycopg2
 import shutil
 import signal
 import subprocess
 import time
 import traceback
-from threading import RLock
+import psycopg2
 
 from multiprocessing import Process, Manager
 
-from cqueue.logs import debug, info, error
 from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, QueueMonitor, Agent, QueuePacemaker
+from cqueue.logs import debug, info, error, warning
 
 
 VERSION = '19.1.1'
@@ -76,6 +73,58 @@ def track_schema(clients):
     );""".encode('utf8')
 
 
+def system_schema(clients):
+    user = []
+    for client in clients:
+        user.append(f'CREATE USER IF NOT EXISTS {client};')
+    user = '\n'.join(user)
+
+    permissions = []
+    for client in clients:
+        permissions.append(f'GRANT ALL ON DATABASE archive TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE archive.messages TO {client};')
+        permissions.append(f'GRANT ALL ON DATABASE qsystem TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE qsystem.namespaces TO {client};')
+    permissions = '\n'.join(permissions)
+
+    return f"""
+    {user}
+    CREATE DATABASE IF NOT EXISTS qsystem;
+    CREATE TABLE IF NOT EXISTS qsystem.namespaces (
+        namespace       character(64),
+        name            character(64)
+    );
+
+    CREATE DATABASE IF NOT EXISTS archive;
+    SET DATABASE = archive;
+    CREATE TABLE IF NOT EXISTS archive.messages (
+        namespace       character(64),
+        name            character(64),
+        uid             INTEGER,
+        time            TIMESTAMP   DEFAULT current_timestamp(),
+        mtype           INT,
+        read            BOOLEAN,
+        read_time       TIMESTAMP,
+        actioned        BOOLEAN,
+        actioned_time   TIMESTAMP,
+        replying_to     INTEGER,
+        message         JSONB
+    );
+
+    CREATE INDEX IF NOT EXISTS archive_messages_index
+    ON archive.messages  (
+        namespace   DESC,
+        name        DESC,
+        read        DESC, 
+        time        DESC,
+        actioned    DESC,
+        mtype       ASC,
+        replying_to DESC
+    );
+    {permissions}
+    """
+
+
 def message_queue_schema(clients, namespace, name):
     """Create a message queue table
 
@@ -90,26 +139,15 @@ def message_queue_schema(clients, namespace, name):
     assert name != 'system', 'system name is reserved'
     assert name != 'logs', 'logs name is reserved'
 
-    user = []
-    for client in clients:
-        user.append(f'CREATE USER IF NOT EXISTS {client};')
-    user = '\n'.join(user)
-
     permissions = []
     for client in clients:
         permissions.append(f'GRANT ALL ON DATABASE {namespace} TO {client};')
         permissions.append(f'GRANT ALL ON TABLE {namespace}.{name} TO {client};')
         permissions.append(f'GRANT ALL ON TABLE {namespace}.system TO {client};')
         permissions.append(f'GRANT ALL ON TABLE {namespace}.logs TO {client};')
-
-        permissions.append(f'GRANT ALL ON DATABASE archive TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE archive.messages TO {client};')
-        permissions.append(f'GRANT ALL ON DATABASE qsystem TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE qsystem.namespaces TO {client};')
     permissions = '\n'.join(permissions)
 
     return f"""
-    {user}
     CREATE DATABASE IF NOT EXISTS {namespace};
     SET DATABASE = {namespace};
     CREATE TABLE IF NOT EXISTS {namespace}.{name} (
@@ -161,40 +199,13 @@ def message_queue_schema(clients, namespace, name):
         ltype       ASC,
         agent       ASC
     );
-
-    CREATE DATABASE IF NOT EXISTS qsystem;
-    CREATE TABLE IF NOT EXISTS qsystem.namespaces (
-        namespace       character(64),
-        name            character(64)
-    );
-
-    CREATE DATABASE IF NOT EXISTS archive;
-    SET DATABASE = archive;
-    CREATE TABLE IF NOT EXISTS archive.messages (
-        namespace       character(64),
-        name            character(64),
-        uid             INTEGER,
-        time            TIMESTAMP   DEFAULT current_timestamp(),
-        mtype           INT,
-        read            BOOLEAN,
-        read_time       TIMESTAMP,
-        actioned        BOOLEAN,
-        actioned_time   TIMESTAMP,
-        replying_to     INTEGER,
-        message         JSONB
-    );
-    CREATE INDEX IF NOT EXISTS archive_messages_index
-    ON archive.messages  (
-        namespace   DESC,
-        name        DESC,
-        read        DESC, 
-        time        DESC,
-        actioned    DESC,
-        mtype       ASC,
-        replying_to DESC
-    );
     {permissions}
+    INSERT INTO qsystem.namespaces(namespace, name) VALUES ('{namespace}', '{name}');
     """
+
+
+def new_queue(client, username, namespace, queue):
+    client.execute(message_queue_schema([username], namespace, queue))
 
 
 class CockRoachDB:
@@ -204,7 +215,7 @@ class CockRoachDB:
     This spawn a cockroach node that will store its data in `location`
     """
 
-    def __init__(self, location, addrs, join=None, clean_on_exit=True, schema=None):
+    def __init__(self, uri, location, join=None, clean_on_exit=True):
         self.location = location
 
         logs = f'{location}/logs'
@@ -216,8 +227,8 @@ class CockRoachDB:
         os.makedirs(temp, exist_ok=True)
         os.makedirs(external, exist_ok=True)
 
+        self.uri = parse_uri(uri)
         self.location = location
-        self.addrs = addrs
         self.bin = COCKROACH_BIN.get(os.name)
 
         if self.bin is None:
@@ -229,9 +240,11 @@ class CockRoachDB:
         else:
             hash = COCKROACH_HASH.get(os.name)
 
+        # db_uri = uri.replace('cockroach', 'postgresql')
+        self.addrs = f'{self.uri["address"]}:{self.uri["port"]}'
         self.arguments = [
             'start', '--insecure',
-            f'--listen-addr={addrs}',
+            f'--listen-addr={self.addrs}',
             f'--external-io-dir={external}',
             f'--store={store}',
             f'--temp-dir={temp}',
@@ -248,7 +261,8 @@ class CockRoachDB:
         self.clean_on_exit = clean_on_exit
         self._process: Process = None
         self.cmd = None
-        self.schema = schema
+        self.client = None
+        self.cursor = None
 
     def _start(self, properties):
         kwargs = dict(
@@ -288,20 +302,41 @@ class CockRoachDB:
                     time.sleep(0.01)
 
             self.properties['db_pid'] = int(open(f'{self.location}/cockroach_pid', 'r').read())
-            # self._setup()
         except Exception as e:
             error(traceback.format_exc(e))
 
-    def _setup(self, client='track_client'):
-        if self.schema is not None:
-            if callable(self.schema):
-                self.schema = self.schema(client)
+        self._setup()
 
-            out = subprocess.check_output(
-                f'{self.bin} sql --insecure --host={self.addrs}', input=self.schema, shell=True)
-            debug(out.decode('utf8').strip())
+    def _setup(self):
+        username = self.uri.get('username', 'root')
+        password = self.uri.get('password', 'none')
 
-    def new_queue(self, namespace, name, client='default_user', clients=None):
+        # create the first user and system tables
+        self._run_local_query(system_schema([username]))
+
+        # -- Login if our new user
+        self.client = psycopg2.connect(
+            user='root',
+            password=password,
+            # sslmode='require',
+            # sslrootcert='certs/ca.crt',
+            # sslkey='certs/client.maxroach.key',
+            # sslcert='certs/client.maxroach.crt',
+            port=self.uri['port'],
+            host=self.uri['address'])
+
+        self.client.set_session(autocommit=True)
+        self.cursor = self.client.cursor()
+
+    def _run_local_query(self, statement):
+        if isinstance(statement, str):
+            statement = statement.encode('utf8')
+
+        out = subprocess.check_output(
+            f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
+        debug(out.decode('utf8').strip())
+
+    def new_queue(self, namespace, name, client='root'):
         """Create a new queue
 
         Parameters
@@ -315,23 +350,7 @@ class CockRoachDB:
         clients: str
             create permission for all the clients
         """
-        if clients is None:
-            clients = []
-
-        clients.append(client)
-        statement = message_queue_schema(clients, namespace, name)
-
-        if isinstance(statement, str):
-            statement = statement.encode('utf8')
-
-        out = subprocess.check_output(
-            f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
-        debug(out.decode('utf8').strip())
-
-        statement = f"""INSERT INTO qsystem.namespaces(namespace, name) VALUES ('{namespace}', '{name}');""".encode('utf8')
-        out = subprocess.check_output(
-            f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
-        debug(out.decode('utf8').strip())
+        new_queue(self.cursor, client, namespace, name)
 
     def stop(self):
         self.properties['running'] = False
@@ -356,6 +375,8 @@ class CockRoachDB:
             raise exc_type
 
     def parse(self, properties, line):
+        debug(line[:-1])
+
         if line[0] == '*':
             return
         try:
@@ -393,8 +414,8 @@ class CockRoachDB:
         return self.properties.get('build')
 
 
-def new_server(location, address, port, join=None, clean_on_exit=True):
-    cockroach = CockRoachDB(location, f'{address}:{port}', join, clean_on_exit, schema=None)
+def new_server(uri, location, join=None, clean_on_exit=True):
+    cockroach = CockRoachDB(uri, location, join, clean_on_exit)
     return cockroach
 
 
@@ -408,6 +429,5 @@ def start_server_main():
     parser.add_argument('--loc', type=str, default=os.getcwd())
     args = parser.parse_args()
 
-    server = new_server(args.loc, args.address, args.port, None, False)
+    server = new_server(f'cockroach://{args.address}:{args.port}', args.loc, None, False)
     server.start()
-

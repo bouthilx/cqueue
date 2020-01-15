@@ -7,14 +7,40 @@ import time
 import traceback
 
 from multiprocessing import Process, Manager
-from cqueue.logs import info, error
 
+from cqueue.logs import info, error, debug
+from cqueue.uri import parse_uri
 
 _base = os.path.dirname(os.path.realpath(__file__))
 
 
+class MongoStartError(Exception):
+    pass
+
+
+def new_queue(client, namespace, name):
+    queues = client[namespace]
+    queue = queues[name]
+    queue.create_index([
+        ('time', pymongo.DESCENDING),
+        ('mtype', pymongo.DESCENDING),
+        ('read', pymongo.DESCENDING),
+        ('actioned', pymongo.DESCENDING),
+        ('replied_id', pymongo.DESCENDING)
+    ])
+
+    client.qsystem.namespaces.insert_one({
+        'namespace': namespace,
+        'name': name
+    })
+
+
 class MongoDB:
-    def __init__(self, address, port, location, clean_on_exit=True):
+    def __init__(self, uri, location, clean_on_exit=True):
+        options = parse_uri(uri)
+        address = options['address']
+        port = options['port']
+
         self.location = location
         self.data_path = f'{self.location}/db'
         self.pid_file = f'{self.location}/pid'
@@ -22,7 +48,7 @@ class MongoDB:
         os.makedirs(self.data_path, exist_ok=True)
 
         self.address = address
-        self.port = port
+        self.port = int(port)
         self.location = location
         self.bin = 'mongod'
 
@@ -80,38 +106,35 @@ class MongoDB:
             self._process.start()
 
             # wait for all the properties to be populated
+            wait_time = 0
             if wait:
-                while self.properties.get('ready') is None:
+                while self.properties.get('ready') is None and wait_time < 5:
                     time.sleep(0.01)
+                    wait_time += 0.01
+
+                if not self.properties.get('ready'):
+                    raise MongoStartError('MongoDB could not start')
 
             self.properties['db_pid'] = int(open(self.pid_file, 'r').read())
             self._setup()
+            return True
+
+        except MongoStartError:
+            raise
 
         except Exception as e:
             error(traceback.format_exc(e))
+            return False
 
     def _setup(self, client='track_client'):
         pass
 
-    def new_queue(self, namespace, name, client='default_user', clients=None):
+    def new_queue(self, namespace, name):
         client = pymongo.MongoClient(
             host=self.address,
             port=self.port)
 
-        queues = client[namespace]
-        queue = queues[name]
-        queue.create_index([
-            ('time', pymongo.DESCENDING),
-            ('mtype', pymongo.DESCENDING),
-            ('read', pymongo.DESCENDING),
-            ('actioned', pymongo.DESCENDING),
-            ('replied_id', pymongo.DESCENDING)
-        ])
-
-        client.qsystem.namespaces.insert_one({
-            'namespace': namespace,
-            'name': name
-        })
+        new_queue(client, namespace, name)
 
     def stop(self):
         self.properties['running'] = False
@@ -138,15 +161,15 @@ class MongoDB:
             raise exc_type
 
     def parse(self, properties, line):
+        debug(line[40:-1])
         line = line.strip()
-
         if line.endswith(f'waiting for connections on port {self.port}'):
             properties['ready'] = True
 
 
-def new_server(location, address, port, join=None, clean_on_exit=True):
-    cockroach = MongoDB(location, f'{address}:{port}', join, clean_on_exit, schema=None)
-    return cockroach
+def new_server(uri, location, join=None, clean_on_exit=True):
+    mongo = MongoDB(uri, location, clean_on_exit)
+    return mongo
 
 
 def start_server_main():
@@ -159,5 +182,5 @@ def start_server_main():
     parser.add_argument('--loc', type=str, default=os.getcwd())
     args = parser.parse_args()
 
-    server = new_server(args.loc, args.address, args.port, None, False)
+    server = new_server(f'mongo://{args.address}:{args.port}', args.loc, None, False)
     server.start()

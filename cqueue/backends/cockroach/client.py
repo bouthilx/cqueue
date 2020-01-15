@@ -4,6 +4,7 @@ from threading import RLock
 
 from cqueue.uri import parse_uri
 from cqueue.backends.queue import Message, MessageQueue, QueuePacemaker
+from .server import new_queue
 from .util import _parse
 
 
@@ -94,10 +95,11 @@ class CKMQClient(MessageQueue):
 
     def __init__(self, uri, namespace, name='worker', log_capture=True, timeout=60):
         uri = parse_uri(uri)
-
+        self.username = 'root'  # uri.get('username', 'default_user')
+        self.password = uri.get('password', 'mq_password')
         self.con = psycopg2.connect(
-            user=uri.get('username', 'default_user'),
-            password=uri.get('password', 'mq_password'),
+            user=self.username,
+            password=self.password,
             # sslmode='require',
             # sslrootcert='certs/ca.crt',
             # sslkey='certs/client.maxroach.key',
@@ -122,6 +124,10 @@ class CKMQClient(MessageQueue):
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         with self.lock:
+            # need to be root to create database :/
+            if (self.namespace, name) not in self.monitor().get_namespaces():
+                new_queue(self.cursor, self.username, self.namespace, name)
+
             self.cursor.execute(f"""
             INSERT INTO  
                 {self.namespace}.{name} (mtype, read, actioned, message, replying_to)
@@ -132,21 +138,36 @@ class CKMQClient(MessageQueue):
 
             return self.cursor.fetchone()[0]
 
-    def dequeue(self, name):
+    def dequeue(self, name, mtype=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        with self.lock:
-            self.cursor.execute(f"""
-            UPDATE {self.namespace}.{name} SET 
-                (read, read_time) = (true, current_timestamp())
-            WHERE 
-                read = false
-            ORDER BY
-                time
-            LIMIT 1
-            RETURNING *
-            """)
+        query = ['read = false']
+        args = list()
 
-            return self.heartbeat_monitor.register_message(name, _parse(self.cursor.fetchone()))
+        if isinstance(mtype, (list, tuple)):
+            query.append('mtype in %s')
+            args.append(tuple(mtype))
+
+        elif isinstance(mtype, int):
+            query.append('mtype = %s')
+            args.append(mtype)
+
+        query = ' AND\n'.join(query)
+        with self.lock:
+            try:
+                self.cursor.execute(f"""
+                UPDATE {self.namespace}.{name} SET 
+                    (read, read_time) = (true, current_timestamp())
+                WHERE 
+                    {query}
+                ORDER BY
+                    time
+                LIMIT 1
+                RETURNING *
+                """, tuple(args))
+
+                return self._register_message(name, _parse(self.cursor.fetchone()))
+            except psycopg2.errors.UndefinedTable:
+                return None
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -161,7 +182,7 @@ class CKMQClient(MessageQueue):
                 uid = %s
             """, (uid,))
 
-            self.heartbeat_monitor.unregister_message(uid)
+            self._unregister_message(name, uid)
             return message
 
     def get_reply(self, name, uid):

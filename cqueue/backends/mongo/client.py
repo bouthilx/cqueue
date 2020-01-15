@@ -5,6 +5,7 @@ from cqueue.uri import parse_uri
 from cqueue.backends.queue import Message, MessageQueue, QueuePacemaker
 
 from .util import _parse
+from .server import new_queue
 
 
 class MongoQueuePacemaker(QueuePacemaker):
@@ -90,6 +91,9 @@ class MongoClient(MessageQueue):
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
+        if (self.namespace, name) not in self.monitor().get_namespaces():
+            new_queue(self.client, self.namespace, name)
+
         return self.client[self.namespace][name].insert_one({
             'time': datetime.datetime.utcnow(),
             'mtype': mtype,
@@ -101,16 +105,24 @@ class MongoClient(MessageQueue):
             'message': message,
         }).inserted_id
 
-    def dequeue(self, name):
+    def dequeue(self, name, mtype=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
+        query = {'read': False}
+
+        if isinstance(mtype, (list, tuple)):
+            query['mtype'] = {'$in': list(mtype)}
+
+        elif isinstance(mtype, int):
+            query['mtype'] = mtype
+
         msg = self.client[self.namespace][name].find_one_and_update(
-            {'read': False},
+            query,
             {'$set': {
                 'read': True, 'read_time': datetime.datetime.utcnow()}
             },
             return_document=pymongo.ReturnDocument.AFTER
         )
-        return self.heartbeat_monitor.register_message(name, _parse(msg))
+        return self._register_message(name, _parse(msg))
 
     def mark_actioned(self, name, message: Message = None, uid: int = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
@@ -124,10 +136,13 @@ class MongoClient(MessageQueue):
                 'actioned_time': datetime.datetime.utcnow()}
             }
         )
-        self.heartbeat_monitor.unregister_message(uid)
+        self._unregister_message(name, uid)
         return message
 
     def get_reply(self, name, uid):
+        if isinstance(uid, Message):
+            uid = uid.uid
+
         return self.monitor().get_reply(self.namespace, name, uid)
 
     def monitor(self):
