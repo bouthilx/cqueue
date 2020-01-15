@@ -105,6 +105,8 @@ class MongoClient(MessageQueue):
             'actioned_time': None,
             'replying_to': replying_to,
             'message': message,
+            'retry': 0,
+            'error': None
         }).inserted_id
 
     def dequeue(self, name, mtype=None):
@@ -126,10 +128,10 @@ class MongoClient(MessageQueue):
         )
         return self._register_message(name, _parse(msg))
 
-    def mark_actioned(self, name, message: Message = None, uid: int = None):
+    def mark_actioned(self, name, uid: Message = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        if isinstance(message, Message):
-            uid = message.uid
+        if isinstance(uid, Message):
+            uid = uid.uid
 
         self.client[self.namespace][name].find_one_and_update(
             {'_id': uid},
@@ -139,7 +141,20 @@ class MongoClient(MessageQueue):
             }
         )
         self._unregister_message(uid)
-        return message
+        return uid
+
+    def mark_error(self, name, uid, error):
+        if isinstance(uid, Message):
+            uid = uid.uid
+
+        self.client[self.namespace][name].find_one_and_update(
+            {'_id': uid},
+            {'$set': {
+                'error': error}
+            }
+        )
+        self._unregister_message(uid)
+        return uid
 
     def reply(self, name, uid):
         if isinstance(uid, Message):

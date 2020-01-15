@@ -173,10 +173,10 @@ class CKMQClient(MessageQueue):
             except psycopg2.errors.UndefinedTable:
                 return None
 
-    def mark_actioned(self, name, message: Message = None, uid: int = None):
+    def mark_actioned(self, name, uid: Message):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        if isinstance(message, Message):
-            uid = message.uid
+        if isinstance(uid, Message):
+            uid = uid.uid
 
         with self.lock:
             self.cursor.execute(f"""
@@ -187,9 +187,27 @@ class CKMQClient(MessageQueue):
             """, (uid,))
 
             self._unregister_message(uid)
-            return message
+            return uid
+
+    def mark_error(self, name, uid, error):
+        if isinstance(uid, Message):
+            uid = uid.uid
+
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {self.namespace}.{name} SET 
+                error = %s
+            WHERE 
+                uid = %s
+            """, (uid, json.dumps(error)))
+
+            self._unregister_message(uid)
+            return uid
 
     def reply(self, name, uid):
+        if isinstance(uid, Message):
+            uid = uid.uid
+
         return self.monitor().reply(self.namespace, name, uid)
 
     def monitor(self):

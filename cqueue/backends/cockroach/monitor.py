@@ -268,7 +268,7 @@ class CKQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_messages(self, namespace, timeout_s=60):
+    def requeue_messages(self, namespace, timeout_s=60, max_retry=3):
         lost = self.lost_messages(namespace, timeout_s)
 
         with self.lock:
@@ -276,12 +276,13 @@ class CKQueueMonitor(QueueMonitor):
                 self.cursor.execute(f"""
                 UPDATE {namespace}.{queue}
                 SET 
-                    (read, read_time) = (false, null)
-                WHERE 
-                    uid = %s AND
-                    read = true       AND
-                    actioned = false
-                """, (message.uid,))
+                    (read, read_time, error) = (false, null, null)
+                WHERE
+                    uid      = %s    AND
+                    read     = true  AND
+                    actioned = false AND
+                    retry    < %s
+                """, (message.uid, max_retry))
 
     def log(self, namespace, agent, ltype=0):
         if isinstance(agent, Agent):

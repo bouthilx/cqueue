@@ -159,7 +159,9 @@ def message_queue_schema(clients, namespace, name):
         actioned        BOOLEAN,
         actioned_time   TIMESTAMP,
         replying_to     INTEGER,
-        message         JSONB
+        message         JSONB,
+        error           JSONB,
+        retry           INT
     );
     CREATE TABLE IF NOT EXISTS {namespace}.system (
         uid             SERIAL      PRIMARY KEY,

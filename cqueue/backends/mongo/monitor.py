@@ -129,16 +129,21 @@ class MongoQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_messages(self, namespace, timeout_s=60):
+    def requeue_messages(self, namespace, timeout_s=60, max_retry=3):
         lost = self.lost_messages(namespace, timeout_s)
         for queue, message in lost:
             self.client[namespace][queue].update({
                 '_id': message.uid,
                 'read': True,
-                'actioned': False
+                'actioned': False,
+                'retry': {'$lt': max_retry}
             }, {
                 'read': {'$set': False},
-                'read_time': {'$set': None}
+                'read_time': {'$set': None},
+                'error': {'$set': None},
+                '$inc': {
+                    'retry': 1
+                }
             })
 
     def log(self, namespace, agent, ltype=0):

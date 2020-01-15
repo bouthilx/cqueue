@@ -184,6 +184,9 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
+    def mark_error(self, name, message, error):
+        raise NotImplementedError()
+
     def push(self, name, message, mtype=0, replying_to=None):
         return self.enqueue(name, message, mtype, replying_to)
 

@@ -80,8 +80,11 @@ class BaseWorker:
                         self.push_result(result, replying_to=workitem.uid)
 
                     self.client.mark_actioned(self.work_queue, workitem)
+
                 except Exception:
-                    error(traceback.format_exc())
+                    error_str = traceback.format_exc()
+                    error(error_str)
+                    self.client.mark_error(self.work_queue, workitem, error_str)
 
             # --
             self.client.push(self.result_queue, {}, mtype=WORKER_LEFT)
