@@ -4,7 +4,6 @@ import time
 
 import pytest
 import shutil
-import traceback
 
 from cqueue.logs import set_verbose_level
 from cqueue.backends import known_backends, new_server
@@ -30,12 +29,13 @@ class TestEnvironment:
         self.uri = f'{backend}://root:pass123@localhost:{port}'
         self.server = None
         self.client = None
+        self.namespace = 'testing_namespace'
 
     def __enter__(self):
         self.server = new_server(uri=self.uri)
         self.server.start(wait=True)
-        self.client = new_client(self.uri, 'testing_namespace', 'worker-test')
-        return self.client
+        self.client = new_client(self.uri, self.namespace, 'client-test')
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.server.stop()
@@ -45,14 +45,16 @@ class TestEnvironment:
 
 @pytest.mark.parametrize('backend', backends)
 def test_pop_empty_client(backend):
-    with TestEnvironment(backend) as client:
+    with TestEnvironment(backend) as env:
+        client = env.client
         msg = client.pop('testing_queue')
         assert msg is None
 
 
 @pytest.mark.parametrize('backend', backends)
 def test_pop_client(backend):
-    with TestEnvironment(backend) as client:
+    with TestEnvironment(backend) as env:
+        client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
@@ -68,7 +70,8 @@ def test_pop_client(backend):
 
 @pytest.mark.parametrize('backend', backends)
 def test_mtype_pop_client(backend):
-    with TestEnvironment(backend) as client:
+    with TestEnvironment(backend) as env:
+        client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
@@ -84,7 +87,8 @@ def test_mtype_pop_client(backend):
 
 @pytest.mark.parametrize('backend', backends)
 def test_union_pop_client(backend):
-    with TestEnvironment(backend) as client:
+    with TestEnvironment(backend) as env:
+        client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
@@ -99,6 +103,7 @@ def test_union_pop_client(backend):
 
 
 if __name__ == '__main__':
+    import traceback
     for b in reversed(backends):
         try:
             print(b)

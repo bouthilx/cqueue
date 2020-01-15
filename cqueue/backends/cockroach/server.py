@@ -304,6 +304,7 @@ class CockRoachDB:
             self.properties['db_pid'] = int(open(f'{self.location}/cockroach_pid', 'r').read())
         except Exception as e:
             error(traceback.format_exc(e))
+            raise e
 
         self._setup()
 

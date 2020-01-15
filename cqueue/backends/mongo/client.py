@@ -92,6 +92,7 @@ class MongoClient(MessageQueue):
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         if (self.namespace, name) not in self.monitor().get_namespaces():
+            print('new_quee')
             new_queue(self.client, self.namespace, name)
 
         return self.client[self.namespace][name].insert_one({
@@ -136,7 +137,7 @@ class MongoClient(MessageQueue):
                 'actioned_time': datetime.datetime.utcnow()}
             }
         )
-        self._unregister_message(name, uid)
+        self._unregister_message(uid)
         return message
 
     def get_reply(self, name, uid):

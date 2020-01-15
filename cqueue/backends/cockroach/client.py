@@ -81,7 +81,7 @@ class CKPacemaker(QueuePacemaker):
             INSERT INTO {self.namespace}.logs (agent, ltype, line)
             VALUES
                 (%s, %s, %s)
-            """, (self.agent_id, ltype, line))
+            """, (self.agent_id, ltype, json.dumps(line)))
 
 
 class CKMQClient(MessageQueue):
@@ -182,7 +182,7 @@ class CKMQClient(MessageQueue):
                 uid = %s
             """, (uid,))
 
-            self._unregister_message(name, uid)
+            self._unregister_message(uid)
             return message
 
     def get_reply(self, name, uid):

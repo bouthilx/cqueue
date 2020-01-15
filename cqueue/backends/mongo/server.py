@@ -99,6 +99,7 @@ class MongoDB:
 
             except Exception:
                 error(traceback.format_exc())
+                raise
 
     def start(self, wait=True):
         try:

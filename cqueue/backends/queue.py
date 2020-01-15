@@ -44,10 +44,12 @@ class _Buffer:
             self.file.flush()
 
     def write(self, data):
+        import traceback
         try:
             self.pacemaker.insert_log_line(data, ltype=self.ltype)
         except Exception as e:
-            print(e, file=self.file)
+            print(f'`{data}`', file=self.file)
+            print(traceback.format_exc(), file=self.file)
 
         if self.file is not None:
             self.file.write(data)
@@ -61,7 +63,7 @@ class QueuePacemaker(threading.Thread):
         self.wait_time = wait_time
         self.agent = agent
         self.agent_id = None
-
+        self.capture = capture
         if capture:
             self.capture_output()
 
@@ -106,6 +108,11 @@ class QueuePacemaker(threading.Thread):
         self.stopped.set()
         self.join()
 
+        if self.capture:
+            import sys
+            sys.stdout = sys.stdout.file
+            sys.stderr = sys.stderr.file
+
     def unregister_agent(self):
         raise NotImplementedError()
 
@@ -126,6 +133,9 @@ class MessageQueue:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.heartbeat_monitor.stop()
         self.heartbeat_monitor.unregister_agent()
+
+    def join(self):
+        return self.heartbeat_monitor.join()
 
     def enqueue(self, name, message, mtype=0, replying_to=None):
         """Insert a new message inside the queue
@@ -188,9 +198,9 @@ class MessageQueue:
 
         return msg
 
-    def _unregister_message(self, name, uid):
+    def _unregister_message(self, uid):
         if self.heartbeat_monitor:
-            return self.heartbeat_monitor.unregister_message(name, uid)
+            return self.heartbeat_monitor.unregister_message(uid)
 
 
 class QueueMonitor:
