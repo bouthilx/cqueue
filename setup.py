@@ -22,7 +22,7 @@ if __name__ == '__main__':
             'typing',
         ],
         data_files=[
-            ('msgqueue', ['backends/bin/cockroach'])
+            ('msgqueue', ['backends/cockroach/bin/cockroach'])
         ],
         setup_requires=['setuptools'],
         tests_require=['pytest', 'flake8', 'codecov', 'pytest-cov'],
