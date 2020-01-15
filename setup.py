@@ -9,20 +9,20 @@ if __name__ == '__main__':
     subprocess.call(f'./{_base}/install_cockroach.sh.sh', shell=True)
 
     setup(
-        name='cqueue',
+        name='msgqueue',
         version='0.0.0',
         description='Message Queue Primitives',
         author='Pierre Delaunay',
         packages=[
-            'cqueue',
-            'cqueue.backends',
+            'msgqueue',
+            'msgqueue.backends',
         ],
         install_requires=[
             'dataclasses',
             'typing',
         ],
         data_files=[
-            ('cqueue', ['backends/bin/cockroach'])
+            ('msgqueue', ['backends/bin/cockroach'])
         ],
         setup_requires=['setuptools'],
         tests_require=['pytest', 'flake8', 'codecov', 'pytest-cov'],

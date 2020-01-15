@@ -2,8 +2,8 @@ import json
 import psycopg2
 from threading import RLock
 
-from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, QueuePacemaker
+from msgqueue.uri import parse_uri
+from msgqueue.backends.queue import Message, MessageQueue, QueuePacemaker
 from .server import new_queue
 from .util import _parse
 

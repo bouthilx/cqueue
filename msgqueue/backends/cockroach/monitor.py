@@ -1,8 +1,8 @@
 import psycopg2
 from threading import RLock
 
-from cqueue.uri import parse_uri
-from cqueue.backends.queue import QueueMonitor, Agent, Message
+from msgqueue.uri import parse_uri
+from msgqueue.backends.queue import QueueMonitor, Agent, Message
 
 from .util import _parse, _parse_agent
 
@@ -268,7 +268,7 @@ class CKQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_messages(self, namespace, timeout_s=60, max_retry=3):
+    def requeue_lost_messages(self, namespace, timeout_s=60, max_retry=3):
         lost = self.lost_messages(namespace, timeout_s)
 
         with self.lock:
@@ -276,13 +276,35 @@ class CKQueueMonitor(QueueMonitor):
                 self.cursor.execute(f"""
                 UPDATE {namespace}.{queue}
                 SET 
-                    (read, read_time, error) = (false, null, null)
+                    (read, read_time, error, retry) = (false, null, null, retry + 1)
                 WHERE
                     uid      = %s    AND
                     read     = true  AND
                     actioned = false AND
                     retry    < %s
                 """, (message.uid, max_retry))
+
+    def failed_messages(self, namespace, queue):
+        with self.lock:
+            self.cursor.execute(f"""
+            SELECT *
+            FROM {namespace}.{queue}
+            WHERE
+                error   != null
+            """)
+
+    def requeue_failed_messages(self, namespace, queue, max_retry=3):
+        with self.lock:
+            self.cursor.execute(f"""
+            UPDATE {namespace}.{queue}
+            SET 
+                (read, read_time, error, retry) = (false, null, null, retry + 1)
+            WHERE
+                read     = true  AND
+                actioned = false AND
+                retry    < %s    AND
+                error   != null
+            """, (max_retry,))
 
     def log(self, namespace, agent, ltype=0):
         if isinstance(agent, Agent):

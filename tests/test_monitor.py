@@ -1,7 +1,7 @@
 import pytest
 
-from cqueue.logs import set_verbose_level
-from cqueue.backends import known_backends, new_monitor
+from msgqueue.logs import set_verbose_level
+from msgqueue.backends import known_backends, new_monitor
 
 from tests.test_client import TestEnvironment
 

@@ -27,6 +27,8 @@ class Message:
     actioned_time: datetime         # Time when that message was done being processed
     replying_to: int                # Message ID this message relies to
     message: str                    # User data
+    retry: int                      # Number of time it has been retried
+    error: str                      # Error if any
 
     def __repr__(self):
         return f"""Message({self.uid}, {self.time}, {self.mtype}, {self.read}, """ +\
@@ -53,6 +55,10 @@ class _Buffer:
 
         if self.file is not None:
             self.file.write(data)
+
+
+class QueueServer:
+    pass
 
 
 class QueuePacemaker(threading.Thread):
@@ -242,20 +248,32 @@ class QueueMonitor:
         raise NotImplementedError()
 
     def reset_queue(self, namespace, name):
+        """Hard reset the queue, putting all unactioned messages into an unread state"""
         raise NotImplementedError()
 
     def dead_agents(self, namespace, timeout_s=60):
+        """Return a list of unresponsive agent"""
         raise NotImplementedError()
 
     def lost_messages(self, namespace, timeout_s=60):
+        """Return the list of messages that were assigned to worker that died"""
         raise NotImplementedError()
 
-    def requeue_messages(self, namespace):
+    def requeue_lost_messages(self, namespace):
+        raise NotImplementedError()
+
+    def failed_messages(self, namespace, queue):
+        """Return the list of messages that failed because of an exception was raised"""
+        raise NotImplementedError()
+
+    def requeue_failed_messages(self, namespace, queue, max_retry):
         raise NotImplementedError()
 
     def log(self, namespace, agent: Union[Agent, int], ltype: int = 0):
+        """Return the log of an agent"""
         raise NotImplementedError()
 
     def reply(self, namespace, name, uid):
+        """Return the reply of a message"""
         raise NotImplementedError
 

@@ -73,4 +73,5 @@ docs/src/reference
 
 # PyBuilder
 target/
-cqueue/backends/cockroach/bin/cockroach
+msgqueue/backends/cockroach/bin/cockroach
+_build/

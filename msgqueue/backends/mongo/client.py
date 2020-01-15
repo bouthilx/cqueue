@@ -1,8 +1,8 @@
 import datetime
 import pymongo
 
-from cqueue.uri import parse_uri
-from cqueue.backends.queue import Message, MessageQueue, QueuePacemaker
+from msgqueue.uri import parse_uri
+from msgqueue.backends.queue import Message, MessageQueue, QueuePacemaker
 
 from .util import _parse
 from .server import new_queue

@@ -1,8 +1,8 @@
 from glob import glob
 import os
 
-from cqueue.logs import info
-from cqueue.uri import parse_uri
+from msgqueue.logs import info
+from msgqueue.uri import parse_uri
 
 
 def make_delayed_import_error(error):
@@ -40,10 +40,10 @@ def fetch_factories(base_module, base_file_name, function_name):
     return factories
 
 
-client_factory = fetch_factories('cqueue.backends', __file__, 'new_client')
-broker_factory = fetch_factories('cqueue.backends', __file__, 'new_server')
-monitor_factory = fetch_factories('cqueue.backends', __file__, 'new_monitor')
-main_factory = fetch_factories('cqueue.backends', __file__, 'start_server_main')
+client_factory = fetch_factories('msgqueue.backends', __file__, 'new_client')
+broker_factory = fetch_factories('msgqueue.backends', __file__, 'new_server')
+monitor_factory = fetch_factories('msgqueue.backends', __file__, 'new_monitor')
+main_factory = fetch_factories('msgqueue.backends', __file__, 'start_server_main')
 
 
 def known_backends():

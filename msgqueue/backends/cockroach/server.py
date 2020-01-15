@@ -8,8 +8,9 @@ import psycopg2
 
 from multiprocessing import Process, Manager
 
-from cqueue.uri import parse_uri
-from cqueue.logs import debug, info, error, warning
+from msgqueue.backends.queue import QueueServer
+from msgqueue.uri import parse_uri
+from msgqueue.logs import debug, info, error, warning
 
 
 VERSION = '19.1.1'
@@ -210,7 +211,7 @@ def new_queue(client, username, namespace, queue):
     client.execute(message_queue_schema([username], namespace, queue))
 
 
-class CockRoachDB:
+class CockRoachDB(QueueServer):
     """ cockroach db is a highly resilient database that allow us to remove
     the Master in a traditional distributed setup.
 

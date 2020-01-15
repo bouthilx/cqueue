@@ -2,8 +2,8 @@ import datetime
 import pymongo
 from threading import RLock
 
-from cqueue.uri import parse_uri
-from cqueue.backends.queue import QueueMonitor, Agent
+from msgqueue.uri import parse_uri
+from msgqueue.backends.queue import QueueMonitor, Agent
 
 from .util import _parse, _parse_agent
 
@@ -87,7 +87,6 @@ class MongoQueueMonitor(QueueMonitor):
             return items
 
     def unactioned(self, namespace, name):
-        """See `~mlbaselines.distributed.queue.MessageQueue`"""
         with self.lock:
             return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
 
@@ -129,7 +128,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_messages(self, namespace, timeout_s=60, max_retry=3):
+    def requeue_lost_messages(self, namespace, timeout_s=60, max_retry=3):
         lost = self.lost_messages(namespace, timeout_s)
         for queue, message in lost:
             self.client[namespace][queue].update({
@@ -145,6 +144,27 @@ class MongoQueueMonitor(QueueMonitor):
                     'retry': 1
                 }
             })
+
+    def failed_messages(self, namespace, queue):
+        failed = self.client[namespace][queue].find({
+            'error': {'$ne': None}
+        })
+        return [_parse(m) for m in failed]
+
+    def requeue_failed_messages(self, namespace, queue, max_retry=3):
+        self.client[namespace][queue].update({
+            'error': {'$ne': None},
+            'actioned': False,
+            'read': True,
+            'retry': {'$lt': max_retry}
+        }, {
+            'read': {'$set': False},
+            'read_time': {'$set': None},
+            'error': {'$set': None},
+            '$inc': {
+                'retry': 1
+            }
+        })
 
     def log(self, namespace, agent, ltype=0):
         from bson import ObjectId

@@ -2,9 +2,9 @@ import traceback
 import time
 from typing import Dict
 
-from cqueue.logs import error, info, warning
-from cqueue.backends import new_client
-from cqueue.backends.queue import MessageQueue, Message
+from msgqueue.logs import error, info, warning
+from msgqueue.backends import new_client
+from msgqueue.backends.queue import MessageQueue, Message
 
 WORK_QUEUE = 'work'
 RESULT_QUEUE = 'result'

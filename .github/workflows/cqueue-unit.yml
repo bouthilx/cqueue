@@ -1,4 +1,4 @@
-name: cqueue-unit
+name: msgqueue-unit
 
 on: [push]
 

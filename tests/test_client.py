@@ -5,9 +5,9 @@ import time
 import pytest
 import shutil
 
-from cqueue.logs import set_verbose_level
-from cqueue.backends import known_backends, new_server
-from cqueue.backends import new_client
+from msgqueue.logs import set_verbose_level
+from msgqueue.backends import known_backends, new_server
+from msgqueue.backends import new_client
 
 set_verbose_level(10)
 backends = known_backends()
@@ -88,10 +88,13 @@ def test_pop_client(backend):
         # for coverage sake check the queries work
         agents = env.monitor.agents(env.namespace)
         print(agents)
-        print(env.monitor.lost_messages(env.namespace))
+
         print(env.monitor.dead_agents(env.namespace))
         print(env.monitor.log(env.namespace, agents[0]), end='')
-        print(env.monitor.requeue_messages(env.namespace))
+        print(env.monitor.lost_messages(env.namespace))
+        print(env.monitor.requeue_lost_messages(env.namespace))
+        print(env.monitor.failed_messages(*names))
+        print(env.monitor.requeue_failed_messages(*names))
         print(env.monitor.messages(*names))
         print(env.monitor.unread_messages(*names))
         print(env.monitor.unactioned_messages(*names))

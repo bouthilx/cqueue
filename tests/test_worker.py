@@ -1,8 +1,8 @@
 import pytest
 
-from cqueue.logs import set_verbose_level
-from cqueue.backends import known_backends
-from cqueue.worker import BaseWorker, WORK_ITEM, SHUTDOWN, WORKER_JOIN, WORKER_LEFT
+from msgqueue.logs import set_verbose_level
+from msgqueue.backends import known_backends
+from msgqueue.worker import BaseWorker, WORK_ITEM, SHUTDOWN, WORKER_JOIN, WORKER_LEFT
 
 from tests.test_client import TestEnvironment
 

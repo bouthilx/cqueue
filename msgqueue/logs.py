@@ -30,7 +30,7 @@ def get_log_record_constructor():
     old_factory = logging.getLogRecordFactory()
 
     def log_record(name, level, path, lno, msg, args, exc_info, func=None, sinfo=None, **kwargs):
-        start = path.rfind('/cqueue/')
+        start = path.rfind('/msgqueue/')
         if start > -1:
             path = path[start + 1:]
         return old_factory(name, level, path, lno, msg, args, exc_info, func, sinfo, **kwargs)

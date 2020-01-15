@@ -8,8 +8,9 @@ import traceback
 
 from multiprocessing import Process, Manager
 
-from cqueue.logs import info, error, debug
-from cqueue.uri import parse_uri
+from msgqueue.backends.queue import QueueServer
+from msgqueue.logs import info, error, debug
+from msgqueue.uri import parse_uri
 
 _base = os.path.dirname(os.path.realpath(__file__))
 
@@ -35,7 +36,7 @@ def new_queue(client, namespace, name):
     })
 
 
-class MongoDB:
+class MongoDB(QueueServer):
     def __init__(self, uri, location, clean_on_exit=True):
         options = parse_uri(uri)
         address = options['address']
