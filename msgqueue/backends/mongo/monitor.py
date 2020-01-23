@@ -37,6 +37,12 @@ class MongoQueueMonitor(QueueMonitor):
 
     def messages(self, namespace, name, limit=100):
         with self.lock:
+            if isinstance(name, list):
+                data = []
+                for n in name:
+                    data.extend(self.messages(namespace, n, limit))
+                return data
+
             return [
                 _parse(msg) for msg in self.client[namespace][name].find({})]
 
