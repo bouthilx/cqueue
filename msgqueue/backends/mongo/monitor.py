@@ -46,6 +46,10 @@ class MongoQueueMonitor(QueueMonitor):
             return [
                 _parse(msg) for msg in self.client[namespace][name].find({})]
 
+    def clear(self, namespace, name):
+        with self.lock:
+            self.client[namespace][name].drop()
+
     def unread_messages(self, namespace, name):
         with self.lock:
             return [

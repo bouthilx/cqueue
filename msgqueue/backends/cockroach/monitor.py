@@ -15,7 +15,7 @@ class CKQueueMonitor(QueueMonitor):
         if cursor is None:
             uri = parse_uri(uri)
             self.con = psycopg2.connect(
-                user=uri.get('username', 'default_user'),
+                user=uri.get('username', 'root'),
                 password=uri.get('password', 'mq_password'),
                 # sslmode='require',
                 # sslrootcert='certs/ca.crt',
@@ -97,7 +97,12 @@ class CKQueueMonitor(QueueMonitor):
         DROP DATABASE IF EXISTS {namespace}
         """)
 
-    def messages(self, namespace, name, limit=100):
+    def clear(self, namespace, name):
+        with self.lock:
+            query = f"""DELETE FROM {namespace}.{name} WHERE *"""
+            self.cursor.execute(query)
+
+    def messages(self, namespace, name, limit=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -105,14 +110,16 @@ class CKQueueMonitor(QueueMonitor):
                     data.extend(self.messages(namespace, n, limit))
                 return data
 
-            self.cursor.execute(f"""
+            query = f"""
             SELECT 
                 * 
             FROM 
                 {namespace}.{name}
-            LIMIT {limit}
-            """)
+            """
+            if limit is not None:
+                query = f'{query} LIMIT {limit}'
 
+            self.cursor.execute(query)
             return self._fetch_all()
 
     def unread_messages(self, namespace, name):

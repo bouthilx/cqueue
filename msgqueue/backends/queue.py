@@ -226,6 +226,10 @@ class QueueMonitor:
     def agents(self, namespace):
         raise NotImplementedError()
 
+    def clear(self, namespace, name):
+        """Clear the queue by removing all messages"""
+        raise NotImplementedError()
+
     def messages(self, namespace, name, limit=100):
         raise NotImplementedError()
 
