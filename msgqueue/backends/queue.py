@@ -233,7 +233,7 @@ class MessageQueue:
 
 
 class QueueMonitor:
-    def archive(self, namespace, archive_name):
+    def archive(self, namespace, archive_name, namespace_out=None):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise NotImplementedError()
 
