@@ -3,6 +3,7 @@ import os
 
 from msgqueue.logs import info
 from msgqueue.uri import parse_uri
+from msgqueue.backends.queue import QueueMonitor, QueueServer, MessageQueue
 
 
 def make_delayed_import_error(error):
@@ -50,17 +51,17 @@ def known_backends():
     return list(client_factory.keys())
 
 
-def new_server(uri, location='/tmp/queue/', clean_on_exit=True, join=None):
+def new_server(uri, location='/tmp/queue/', clean_on_exit=True, join=None) -> QueueServer:
     options = parse_uri(uri)
     return broker_factory.get(options.get('scheme'))(uri, location, join, clean_on_exit)
 
 
-def new_client(uri, namespace, name='worker', log_capture=True, timeout=60):
+def new_client(uri, namespace, name='worker', log_capture=True, timeout=60) -> MessageQueue:
     options = parse_uri(uri)
     return client_factory.get(options.get('scheme'))(uri, namespace, name, log_capture, timeout)
 
 
-def new_monitor(uri, *args, **kwargs):
+def new_monitor(uri, *args, **kwargs) -> QueueMonitor:
     options = parse_uri(uri)
     return monitor_factory.get(options.get('scheme'))(uri, *args, **kwargs)
 

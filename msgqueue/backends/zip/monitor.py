@@ -50,12 +50,12 @@ class ZipQueueMonitor(QueueMonitor):
     def agents(self, namespace):
         with self.lock:
             with self.zip.open(f'{namespace}/system.json', 'r') as queue:
-                return (_parse_agent(m) for m in json.load(fp=queue))
+                return (Agent(**m) for m in json.load(fp=queue))
 
     def messages(self, namespace, name, limit=100):
         with self.lock:
             with self.zip.open(f'{namespace}/{name}.json', 'r') as queue:
-                return (_parse(m) for m in json.load(fp=queue))
+                return (Message(**m) for m in json.load(fp=queue))
 
     def unread_messages(self, namespace, name):
         unread = []
@@ -145,3 +145,10 @@ class ZipQueueMonitor(QueueMonitor):
 def new_monitor(*args, **kwargs):
     return ZipQueueMonitor(*args, **kwargs)
 
+
+if __name__ == '__main__':
+    from msgqueue.backends import new_monitor
+    monitor = new_monitor('zip:/home/setepenre/work/olympus/data.zip')
+
+    for m in monitor.messages('classification', 'OLYWORK'):
+        print(m)
