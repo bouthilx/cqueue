@@ -2,7 +2,7 @@ import psycopg2
 from threading import RLock
 
 from msgqueue.uri import parse_uri
-from msgqueue.backends.queue import QueueMonitor, Agent, Message
+from msgqueue.backends.queue import QueueMonitor, Agent, Message, to_dict
 
 from .util import _parse, _parse_agent
 
@@ -69,38 +69,87 @@ class CKQueueMonitor(QueueMonitor):
 
             return [n[0] for n in self.cursor.fetchall()]
 
-    def archive_namespace(self, namespace):
-        # TODO create partition per namespace
+    def _log_types(self, namespace, agent):
         self.cursor.execute(f"""
-        SELECT 
-          tablename as table 
-        FROM 
-          pg_tables  
-        WHERE schemaname = '{namespace}'
-        """)
+            SELECT 
+                ltype 
+            FROM 
+                {namespace}.logs
+            WHERE
+                agent = {agent.uid}
+            """)
+        return set(r[0] for r in self.cursor.fetchall())
 
-        names = [n for n in self.cursor.fetchall()]
-        for table in names:
-            if table == 'system':
-                continue
+    def archive(self, namespace, archive_name):
+        """Archive a namespace into a zipfile and delete the namespace from the database"""
+        import zipfile
+        import json
+
+        class _Wrapper:
+            def __init__(self, buffer):
+                self.buffer = buffer
+
+            def write(self, data):
+                self.buffer.write(data.encode('utf-8'))
+
+        with self.lock:
+            with zipfile.ZipFile(archive_name, 'w') as archive:
+                queues = self.queues(namespace)
+
+                for queue in set(queues):
+                    with archive.open(f'{namespace}/{queue}.json', 'w') as queue_archive:
+                        messages = self.messages(namespace, queue)
+                        json.dump(messages, fp=_Wrapper(queue_archive), default=to_dict)
+
+                with archive.open(f'{namespace}/system.json', 'w') as system_archive:
+                    agents = self.agents(namespace)
+                    json.dump(agents, fp=_Wrapper(system_archive), default=to_dict)
+
+                for agent in agents:
+                    for type in self._log_types(namespace, agent):
+                        with archive.open(f'{namespace}/logs/{agent.uid}_{type}.txt', 'w') as logs_archive:
+                            log = self.log(namespace, agent, type)
+                            _Wrapper(logs_archive).write(log)
 
             self.cursor.execute(f"""
-            INSERT INTO archive.messages
-                SELECT
-                    {namespace},
-                    {table},
-                    *
-                FROM {namespace}.{table};
+            DROP DATABASE IF EXISTS {namespace}
             """)
 
-        self.cursor.execute(f"""
-        DROP DATABASE IF EXISTS {namespace}
-        """)
+        print('Archiving is done')
+        return None
+
+        # # TODO create partition per namespace
+        # self.cursor.execute(f"""
+        # SELECT
+        #   tablename as table
+        # FROM
+        #   pg_tables
+        # WHERE schemaname = '{namespace}'
+        # """)
+        #
+        # names = [n for n in self.cursor.fetchall()]
+        # for table in names:
+        #     if table == 'system':
+        #         continue
+        #
+        #     self.cursor.execute(f"""
+        #     INSERT INTO archive.messages
+        #         SELECT
+        #             {namespace},
+        #             {table},
+        #             *
+        #         FROM {namespace}.{table};
+        #     """)
+        #
+        # self.cursor.execute(f"""
+        # DROP DATABASE IF EXISTS {namespace}
+        # """)
 
     def clear(self, namespace, name):
         with self.lock:
-            query = f"""DELETE FROM {namespace}.{name} WHERE *"""
+            query = f"""DELETE FROM {namespace}.{name}"""
             self.cursor.execute(query)
+            self.cursor.execute("DELETE FROM qsystem.namespaces WHERE namespace = %s", (namespace,))
 
     def messages(self, namespace, name, limit=None):
         with self.lock:

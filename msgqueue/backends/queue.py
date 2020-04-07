@@ -1,7 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime
 import threading
 from typing import Union, List
+
+
+def to_dict(a):
+    if isinstance(a, (Agent, Message)):
+        return asdict(a)
+
+    elif isinstance(a, datetime):
+        return a.timestamp()
+
+    raise TypeError(f'type {type(a)} not json serializable')
 
 
 @dataclass
@@ -14,6 +24,9 @@ class Agent:
     # Necessary to detect messages that are stuck
     message: int         # Message the Agent is processing
     queue: str           # Message queue the message belong to
+
+    def to_dict(self):
+        return asdict(self)
 
 
 @dataclass
@@ -33,6 +46,9 @@ class Message:
     def __repr__(self):
         return f"""Message({self.uid}, {self.time}, {self.mtype}, {self.read}, """ +\
             f"""{self.read_time}, {self.actioned}, {self.actioned_time}, {self.message})"""
+
+    def to_dict(self):
+        return asdict(self)
 
 
 class _Buffer:
@@ -217,6 +233,10 @@ class MessageQueue:
 
 
 class QueueMonitor:
+    def archive(self, namespace, archive_name):
+        """Archive a namespace into a zipfile and delete the namespace from the database"""
+        raise NotImplementedError()
+
     def namespaces(self):
         raise NotImplementedError()
 
