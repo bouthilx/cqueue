@@ -2,15 +2,18 @@ from contextlib import closing
 import socket
 import time
 
+import os
 import pytest
 import shutil
+from itertools import product
 
 from msgqueue.logs import set_verbose_level
 from msgqueue.backends import known_backends, new_server
-from msgqueue.backends import new_client
+from msgqueue.backends import new_client, new_monitor_process
 
 set_verbose_level(10)
 backends = known_backends()
+formats = ['json', 'bson']
 
 WORK_ITEM = 1
 RESULT_ITEM = 2
@@ -23,7 +26,7 @@ def get_free_port():
         return s.getsockname()[1]
 
 
-class TestEnvironment:
+class Environment:
     def __init__(self, backend):
         port = get_free_port()
         self.uri = f'{backend}://root:pass123@localhost:{port}'
@@ -46,7 +49,7 @@ class TestEnvironment:
 
 @pytest.mark.parametrize('backend', backends)
 def test_pop_empty_client(backend):
-    with TestEnvironment(backend) as env:
+    with Environment(backend) as env:
         client = env.client
         msg = client.pop('testing_queue')
         assert msg is None
@@ -54,7 +57,7 @@ def test_pop_empty_client(backend):
 
 @pytest.mark.parametrize('backend', backends)
 def test_pop_client(backend):
-    with TestEnvironment(backend) as env:
+    with Environment(backend) as env:
         client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
@@ -100,9 +103,9 @@ def test_pop_client(backend):
         print(env.monitor.unactioned_messages(*names))
 
 
-@pytest.mark.parametrize('backend', backends)
-def test_mtype_pop_client(backend):
-    with TestEnvironment(backend) as env:
+@pytest.mark.parametrize('backend,format', product(backends, formats))
+def test_mtype_pop_client(backend, format):
+    with Environment(backend) as env:
         client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
@@ -115,11 +118,21 @@ def test_mtype_pop_client(backend):
         msg = client.pop('testing_queue', RESULT_ITEM)
         client.mark_actioned('testing_queue', msg)
         assert msg.message == result_item, 'result_item is the only message with the correct type'
+        env.monitor.archive(
+            env.namespace,
+            f'test_{backend}.zip',
+            namespace_out='new_namespace',
+            format=format)
+
+    monitor = new_monitor_process(f'zip:test_{backend}.zip')
+    assert len(monitor.messages('new_namespace', 'testing_queue')) == 3
+    os.remove(f'test_{backend}.zip')
+    monitor.stop()
 
 
-@pytest.mark.parametrize('backend', backends)
-def test_union_pop_client(backend):
-    with TestEnvironment(backend) as env:
+@pytest.mark.parametrize('backend,format', product(backends, formats))
+def test_union_pop_client(backend, format):
+    with Environment(backend) as env:
         client = env.client
         nothing_item = {'json': 'nothing'}
         work_item = {'json': 'work'}
@@ -132,6 +145,17 @@ def test_union_pop_client(backend):
         msg = client.pop('testing_queue', (WORK_ITEM, RESULT_ITEM))
         client.mark_actioned('testing_queue', msg)
         assert msg.message == work_item, 'work_item was inserted first it needs to be first out'
+
+        env.monitor.archive(
+            env.namespace,
+            f'test_{backend}.zip',
+            namespace_out='new_namespace',
+            format=format)
+
+    monitor = new_monitor_process(f'zip:test_{backend}.zip')
+    assert len(monitor.messages('new_namespace', 'testing_queue')) == 3
+    os.remove(f'test_{backend}.zip')
+    monitor.stop()
 
 
 if __name__ == '__main__':

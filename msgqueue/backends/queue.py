@@ -301,7 +301,7 @@ class QueueMonitor:
         """Return the reply of a message"""
         raise NotImplementedError
 
-    def _make_archive(self, namespace, archive_name, namespace_out, format, remove_db, log_types, lock):
+    def _make_archive(self, namespace, archive_name, namespace_out, format, remove_db, log_types, lock, new_to_dict=to_dict):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         import zipfile
         import json
@@ -310,7 +310,7 @@ class QueueMonitor:
         if format == 'bson':
             dumper = lambda m, fp: fp.write(bson.encode({'data': [asdict(i) for i in m]}))
         elif format == 'json':
-            dumper = lambda m, fp: json.dump(m, fp=_Wrapper(fp), default=to_dict)
+            dumper = lambda m, fp: json.dump(m, fp=_Wrapper(fp), default=new_to_dict)
         else:
             raise RuntimeError('Format must be json or bson')
 

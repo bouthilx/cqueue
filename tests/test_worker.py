@@ -4,7 +4,7 @@ from msgqueue.logs import set_verbose_level
 from msgqueue.backends import known_backends
 from msgqueue.worker import BaseWorker, WORK_ITEM, SHUTDOWN, WORKER_JOIN, WORKER_LEFT
 
-from tests.test_client import TestEnvironment
+from tests.test_client import Environment
 
 set_verbose_level(10)
 backends = known_backends()
@@ -25,7 +25,7 @@ class TestWorker(BaseWorker):
 
 @pytest.mark.parametrize('backend', backends)
 def test_base_worker(backend):
-    with TestEnvironment(backend) as env:
+    with Environment(backend) as env:
         client = env.client
 
         # with client:

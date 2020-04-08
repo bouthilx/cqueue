@@ -93,7 +93,6 @@ class MongoDB(QueueServer):
                     if proc.poll() is None:
                         line = proc.stdout.readline().decode('utf-8')
                         if line:
-                            print(line)
                             self.parse(properties, line)
                     else:
                         properties['running'] = False
@@ -114,6 +113,9 @@ class MongoDB(QueueServer):
                 while self._process.is_alive() and self.properties.get('ready') is None and wait_time < 5:
                     time.sleep(0.01)
                     wait_time += 0.01
+
+                if not self._process.is_alive():
+                    raise MongoStartError('MongoDB died')
 
                 if not self.properties.get('ready'):
                     raise MongoStartError('MongoDB could not start')

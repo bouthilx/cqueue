@@ -91,7 +91,7 @@ class MongoQueueMonitor(QueueMonitor):
     def reset_queue(self, namespace, name):
         with self.lock:
             msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
-            rc = self.client[namespace][name].update(
+            rc = self.client[namespace][name].update_many(
                 {'actioned': False},
                 {'$set': {
                     'read': False, 'read_time': None}
@@ -213,7 +213,8 @@ class MongoQueueMonitor(QueueMonitor):
             format,
             remove_db,
             self._log_types,
-            self.lock
+            self.lock,
+            mongo_to_dict
         )
 
 
