@@ -202,43 +202,19 @@ class MongoQueueMonitor(QueueMonitor):
 
         return set(r['ltype'] for r in data)
 
-    def archive(self, namespace, archive_name, namespace_out=None):
-        import zipfile
-        import json
+    def archive(self, namespace, archive_name, namespace_out=None, format='json'):
+        def remove_db(nm):
+            self.client.drop_database(nm)
 
-        if namespace_out is None:
-            namespace_out = namespace
-
-        class _Wrapper:
-            def __init__(self, buffer):
-                self.buffer = buffer
-
-            def write(self, data):
-                self.buffer.write(data.encode('utf-8'))
-
-        with self.lock:
-            with zipfile.ZipFile(archive_name, 'w') as archive:
-                queues = self.queues(namespace)
-
-                for queue in set(queues):
-                    with archive.open(f'{namespace_out}/{queue}.json', 'w') as queue_archive:
-                        messages = self.messages(namespace, queue)
-                        json.dump(messages, fp=_Wrapper(queue_archive), default=mongo_to_dict)
-
-                with archive.open(f'{namespace_out}/system.json', 'w') as system_archive:
-                    agents = self.agents(namespace)
-                    json.dump(agents, fp=_Wrapper(system_archive), default=mongo_to_dict)
-
-                for agent in agents:
-                    for type in self._log_types(namespace, agent):
-                        with archive.open(f'{namespace_out}/logs/{agent.uid}_{type}.txt', 'w') as logs_archive:
-                            log = self.log(namespace, agent, type)
-                            _Wrapper(logs_archive).write(log)
-
-            self.client.drop_database(namespace)
-
-        print('Archiving is done')
-        return None
+        self._make_archive(
+            namespace,
+            archive_name,
+            namespace_out,
+            format,
+            remove_db,
+            self._log_types,
+            self.lock
+        )
 
 
 def new_monitor(*args, **kwargs):

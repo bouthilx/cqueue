@@ -1,7 +1,9 @@
 from datetime import datetime
-
+from collections import defaultdict
+import bson
+import time
 import json
-from threading import RLock
+from multiprocessing import RLock
 import zipfile
 
 
@@ -11,14 +13,17 @@ from msgqueue.backends.queue import QueueMonitor, Agent, Message
 
 def cached(f):
     def wrapper(self, *args):
-        if self._cache and args in self._cache:
-            return self._cache[args]
-
-        r = f(self, *args)
-        if self._cache:
-            self._cache[args] = r
-        return r
+        with self.lock:
+            # start = time.time()
+            r = f(self, *args)
+            # print(f'Function {f} took {time.time() - start}')
+            return r
     return wrapper
+
+
+def bson_encode(x):
+    r = bson.decode(x.read())['data']
+    return r
 
 
 class ZipQueueMonitor(QueueMonitor):
@@ -27,8 +32,13 @@ class ZipQueueMonitor(QueueMonitor):
         self.lock = RLock()
         self.zip = zipfile.ZipFile(uri.get('path', uri.get('address', None)))
         self._cache = {}
+        self.format = 'json'
+        # find the format
+        self.queues(self.namespaces()[0])
+        self.index = defaultdict(list)
+        self.should_build_index = defaultdict(lambda: True)
 
-    def archive(self, namespace, archive_name, namespace_out=None):
+    def archive(self, namespace, archive_name, namespace_out=None, format=None):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise RuntimeError('Already achieved')
 
@@ -65,7 +75,13 @@ class ZipQueueMonitor(QueueMonitor):
                     _, queue = name.split('/', maxsplit=2)
 
                     if queue.endswith('.json'):
+                        self.format = 'json'
                         queues.add(queue[:-5])
+
+                    elif queue.endswith('.bson'):
+                        self.format = 'bson'
+                        queues.add(queue[:-5])
+
                 except ValueError:
                     pass
 
@@ -73,48 +89,97 @@ class ZipQueueMonitor(QueueMonitor):
         queues.discard('system')
         return list(queues)
 
+    @property
+    def loader(self):
+        if self.format == 'json':
+            return json.load
+        else:
+            return bson_encode
+
     @cached
     def agents(self, namespace):
         with self.lock:
-            with self.zip.open(f'{namespace}/system.json', 'r') as queue:
-                return list(Agent(**m) for m in json.load(fp=queue))
+            with self.zip.open(f'{namespace}/system.{self.format}', 'r') as queue:
+                return list(Agent(**m) for m in self.loader(queue))
 
     @cached
     def messages(self, namespace, name, limit=100):
         with self.lock:
-            with self.zip.open(f'{namespace}/{name}.json', 'r') as queue:
-                return list(Message(**m) for m in json.load(fp=queue))
+            with self.zip.open(f'{namespace}/{name}.{self.format}', 'r') as queue:
+                m = list(self.build_index(namespace, name, Message(**m)) for m in self.loader(queue))
+                self.should_build_index[(namespace, name)] = False
+                return m
+
+    def build_index(self, namespace, name, message):
+        # indexing cause issues with Dash
+        if self.should_build_index[(namespace, name)]:
+            if message.read:
+                self.index[(namespace, name, 'read')].append(message)
+            else:
+                self.index[(namespace, name, 'underead')].append(message)
+
+            if message.actioned:
+                self.index[(namespace, name, 'actioned')].append(message)
+            else:
+                self.index[(namespace, name, 'unactioned')].append(message)
+
+            self.index[(namespace, name, message.mtype)].append(message)
+        return message
 
     @cached
     def unread_messages(self, namespace, name):
+        if len(self.index[(namespace, name, 'unread')]) > 0:
+            return self.index[(namespace, name, 'unread')]
+
+        messages = self.messages(namespace, name)
+
         unread = []
-        for m in self.messages(namespace, name):
+        for m in messages:
             if not m.read:
                 unread.append(m)
+
         return unread
 
     @cached
     def unactioned_messages(self, namespace, name):
+        if len(self.index[(namespace, name, 'unactioned')]) > 0:
+            return self.index[(namespace, name, 'unactioned')]
+
+        messages = self.messages(namespace, name)
+
         unread = []
-        for m in self.messages(namespace, name):
+        for m in messages:
             if not m.actioned:
                 unread.append(m)
+
         return unread
 
     @cached
     def read_messages(self, namespace, name):
+        if len(self.index[(namespace, name, 'read')]) > 0:
+            return self.index[(namespace, name, 'read')]
+
+        messages = self.messages(namespace, name)
+
         unread = []
-        for m in self.messages(namespace, name):
+        for m in messages:
             if m.read:
                 unread.append(m)
+
         return unread
 
     @cached
     def actioned_messages(self, namespace, name):
+        if len(self.index[(namespace, name, 'actioned')]) > 0:
+            return self.index[(namespace, name, 'actioned')]
+
+        messages = self.messages(namespace, name)
+
         unread = []
-        for m in self.messages(namespace, name):
+        for m in messages:
             if m.actioned:
                 unread.append(m)
+
         return unread
 
     @cached
@@ -189,7 +254,7 @@ def new_monitor(*args, **kwargs):
 
 if __name__ == '__main__':
     from msgqueue.backends import new_monitor
-    monitor = new_monitor('zip:/home/setepenre/work/olympus/data.zip')
+    monitor = ZipQueueMonitor('zip:/home/setepenre/work/olympus/data.zip')
 
     for m in monitor.messages('classification', 'OLYWORK'):
         print(m)
@@ -199,3 +264,5 @@ if __name__ == '__main__':
 
     for n in monitor.queues('classification'):
         print(n)
+
+   #  monitor.stop()

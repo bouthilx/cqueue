@@ -80,46 +80,23 @@ class CKQueueMonitor(QueueMonitor):
             """)
         return set(r[0] for r in self.cursor.fetchall())
 
-    def archive(self, namespace, archive_name, namespace_out=None):
+    def archive(self, namespace, archive_name, namespace_out=None, format='json'):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
-        import zipfile
-        import json
 
-        if namespace_out is None:
-            namespace_out = namespace
-
-        class _Wrapper:
-            def __init__(self, buffer):
-                self.buffer = buffer
-
-            def write(self, data):
-                self.buffer.write(data.encode('utf-8'))
-
-        with self.lock:
-            with zipfile.ZipFile(archive_name, 'w') as archive:
-                queues = self.queues(namespace)
-
-                for queue in set(queues):
-                    with archive.open(f'{namespace_out}/{queue}.json', 'w') as queue_archive:
-                        messages = self.messages(namespace, queue)
-                        json.dump(messages, fp=_Wrapper(queue_archive), default=to_dict)
-
-                with archive.open(f'{namespace_out}/system.json', 'w') as system_archive:
-                    agents = self.agents(namespace)
-                    json.dump(agents, fp=_Wrapper(system_archive), default=to_dict)
-
-                for agent in agents:
-                    for type in self._log_types(namespace, agent):
-                        with archive.open(f'{namespace_out}/logs/{agent.uid}_{type}.txt', 'w') as logs_archive:
-                            log = self.log(namespace, agent, type)
-                            _Wrapper(logs_archive).write(log)
-
+        def remove_db(nm):
             self.cursor.execute(f"""
-            DROP DATABASE IF EXISTS {namespace}
+            DROP DATABASE IF EXISTS {nm}
             """)
 
-        print('Archiving is done')
-        return None
+        self._make_archive(
+            namespace,
+            archive_name,
+            namespace_out,
+            format,
+            remove_db,
+            self._log_types,
+            self.lock
+        )
 
         # # TODO create partition per namespace
         # self.cursor.execute(f"""

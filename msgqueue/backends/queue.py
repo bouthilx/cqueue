@@ -233,7 +233,7 @@ class MessageQueue:
 
 
 class QueueMonitor:
-    def archive(self, namespace, archive_name, namespace_out=None):
+    def archive(self, namespace, archive_name, namespace_out=None, format='json'):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise NotImplementedError()
 
@@ -300,4 +300,54 @@ class QueueMonitor:
     def reply(self, namespace, name, uid):
         """Return the reply of a message"""
         raise NotImplementedError
+
+    def _make_archive(self, namespace, archive_name, namespace_out, format, remove_db, log_types, lock):
+        """Archive a namespace into a zipfile and delete the namespace from the database"""
+        import zipfile
+        import json
+        import bson
+
+        if format == 'bson':
+            dumper = lambda m, fp: fp.write(bson.encode({'data': [asdict(i) for i in m]}))
+        elif format == 'json':
+            dumper = lambda m, fp: json.dump(m, fp=_Wrapper(fp), default=to_dict)
+        else:
+            raise RuntimeError('Format must be json or bson')
+
+        if namespace_out is None:
+            namespace_out = namespace
+
+        # transform strings to bytes
+        class _Wrapper:
+            def __init__(self, buffer):
+                self.buffer = buffer
+
+            def write(self, data):
+                self.buffer.write(data.encode('utf-8'))
+
+        # archive logic
+        with lock:
+            with zipfile.ZipFile(archive_name, 'w') as archive:
+                queues = self.queues(namespace)
+
+                for queue in set(queues):
+                    with archive.open(f'{namespace_out}/{queue}.{format}', 'w') as queue_archive:
+                        messages = self.messages(namespace, queue)
+                        dumper(messages, queue_archive)
+
+                with archive.open(f'{namespace_out}/system.{format}', 'w') as system_archive:
+                    agents = self.agents(namespace)
+                    dumper(agents, system_archive)
+
+                for agent in agents:
+                    for type in log_types(namespace, agent):
+                        with archive.open(f'{namespace_out}/logs/{agent.uid}_{type}.txt', 'w') as logs_archive:
+                            log = self.log(namespace, agent, type)
+                            _Wrapper(logs_archive).write(log)
+
+            if remove_db:
+                remove_db(namespace)
+
+        print('Archiving is done')
+        return None
 

@@ -1,5 +1,6 @@
 from glob import glob
 import os
+from multiprocessing import RLock
 
 from msgqueue.logs import info
 from msgqueue.uri import parse_uri
@@ -80,3 +81,59 @@ def ssh_launch(node, cmd, environ):
     cmd = f'ssh -q {node} nohup {cmd} > {node}.out 2> {node}.err < /dev/null &'
     info(cmd)
     return True
+
+
+def _worker(remote, parent_remote, factory, *args, **kwargs):
+    print('New Monitor process')
+    obj = factory(*args, **kwargs)
+    print(parent_remote)
+    parent_remote.close()
+
+    while True:
+        cmd, args, kwargs = remote.recv()
+
+        if cmd == 'stop':
+            break
+
+        result = getattr(obj, cmd)(*args, **kwargs)
+        remote.send(result)
+
+    remote.close()
+
+
+class RemoteMonitor:
+    """Spawn the monitor in a child process"""
+    def __init__(self, *args, **kwargs):
+        from multiprocessing import Process, Pipe
+        self.remote, work_remote = Pipe()
+        self.lock = RLock()
+
+        worker = Process(
+            target=_worker,
+            args=(work_remote, self.remote, new_monitor, *args),
+            kwargs=kwargs)
+
+        worker.start()
+        work_remote.close()
+        self.fun_name = None
+
+    def new_rpc(self, function):
+        def send_rpc(*args, **kwargs):
+            with self.lock:
+                self.remote.send((function, args, kwargs))
+                try:
+                    return self.remote.recv()
+                except EOFError:
+                    if function != 'stop':
+                        raise
+
+        print(f'new rpc for {function}')
+        return send_rpc
+
+    def __getattr__(self, item):
+        return RemoteMonitor.new_rpc(self, item)
+
+
+def new_monitor_process(*args, **kwargs):
+    mon = RemoteMonitor(*args, **kwargs)
+    return mon
