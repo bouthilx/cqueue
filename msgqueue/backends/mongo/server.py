@@ -93,6 +93,7 @@ class MongoDB(QueueServer):
                     if proc.poll() is None:
                         line = proc.stdout.readline().decode('utf-8')
                         if line:
+                            print(line)
                             self.parse(properties, line)
                     else:
                         properties['running'] = False
@@ -110,7 +111,7 @@ class MongoDB(QueueServer):
             # wait for all the properties to be populated
             wait_time = 0
             if wait:
-                while self.properties.get('ready') is None and wait_time < 5:
+                while self._process.is_alive() and self.properties.get('ready') is None and wait_time < 5:
                     time.sleep(0.01)
                     wait_time += 0.01
 
@@ -167,6 +168,12 @@ class MongoDB(QueueServer):
         line = line.strip()
         if line.endswith(f'waiting for connections on port {self.port}'):
             properties['ready'] = True
+
+        if 'shutting down with code:0' in line:
+            pass
+
+        elif 'shutting down' in line:
+            raise RuntimeError(f'Closing because: `{line}`')
 
 
 def new_server(uri, location, join=None, clean_on_exit=True):
