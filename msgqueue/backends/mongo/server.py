@@ -48,10 +48,14 @@ class MongoDB(QueueServer):
 
         os.makedirs(self.data_path, exist_ok=True)
 
+        if os.path.exists(self.pid_file):
+            raise RuntimeError('MongoDB is already alive')
+
         self.address = address
         self.port = int(port)
         self.location = location
         self.bin = 'mongod'
+        self.loglines = []
 
         if self.bin is None:
             raise RuntimeError('Your OS is not supported')
@@ -147,6 +151,15 @@ class MongoDB(QueueServer):
 
         try:
             os.kill(self.properties['db_pid'], signal.SIGTERM)
+
+            if os.path.exists(self.pid_file):
+                pid = int(open(self.pid_file, 'r').read())
+                os.kill(pid, signal.SIGINT)
+                
+                time.sleep(5)
+                os.remove(self.pid_file)
+                os.kill(pid, signal.SIGTERM)
+
         except ProcessLookupError:
             pass
 
@@ -168,6 +181,11 @@ class MongoDB(QueueServer):
     def parse(self, properties, line):
         debug(line[40:-1])
         line = line.strip()
+
+        # save the init logs for debugging
+        if '[initandlisten]' in line:
+            self.loglines.append(line)
+
         if line.endswith(f'waiting for connections on port {self.port}'):
             properties['ready'] = True
 
@@ -175,6 +193,7 @@ class MongoDB(QueueServer):
             pass
 
         elif 'shutting down' in line:
+            print('\n'.join(self.loglines))
             raise RuntimeError(f'Closing because: `{line}`')
 
 
