@@ -155,7 +155,7 @@ class MongoDB(QueueServer):
             if os.path.exists(self.pid_file):
                 pid = int(open(self.pid_file, 'r').read())
                 os.kill(pid, signal.SIGINT)
-                
+
                 time.sleep(5)
                 os.remove(self.pid_file)
                 os.kill(pid, signal.SIGTERM)
@@ -164,7 +164,10 @@ class MongoDB(QueueServer):
             pass
 
         if self.clean_on_exit:
-            shutil.rmtree(self.location)
+            try:
+                shutil.rmtree(self.location)
+            except FileNotFoundError:
+                pass
 
     def wait(self):
         while self._process.is_alive():

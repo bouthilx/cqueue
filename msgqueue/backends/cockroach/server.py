@@ -363,7 +363,10 @@ class CockRoachDB(QueueServer):
         os.kill(self.properties['db_pid'], signal.SIGTERM)
 
         if self.clean_on_exit:
-            shutil.rmtree(self.location)
+            try:
+                shutil.rmtree(self.location)
+            except FileNotFoundError:
+                pass
 
     def wait(self):
         while True:
