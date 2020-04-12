@@ -18,7 +18,7 @@ if __name__ == '__main__':
 
     setup(
         name='msgqueue',
-        version='0.0.0',
+        version='0.1.0',
         description='Message Queue Primitives',
         author='Pierre Delaunay',
         packages=[
