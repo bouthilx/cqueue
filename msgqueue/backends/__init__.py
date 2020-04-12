@@ -52,19 +52,28 @@ def known_backends():
     return list(client_factory.keys())
 
 
+def _maybe(dictionary, key):
+    fun = dictionary.get(key)
+
+    if fun is None:
+        raise KeyError(f'{key} backend was not found; pick among the known backends: {list(dictionary.keys())}')
+
+    return fun
+
+
 def new_server(uri, location='/tmp/queue/', clean_on_exit=True, join=None) -> QueueServer:
     options = parse_uri(uri)
-    return broker_factory.get(options.get('scheme'))(uri, location, join, clean_on_exit)
+    return _maybe(broker_factory, options.get('scheme'))(uri, location, join, clean_on_exit)
 
 
 def new_client(uri, namespace, name='worker', log_capture=True, timeout=60) -> MessageQueue:
     options = parse_uri(uri)
-    return client_factory.get(options.get('scheme'))(uri, namespace, name, log_capture, timeout)
+    return _maybe(client_factory, options.get('scheme'))(uri, namespace, name, log_capture, timeout)
 
 
 def new_monitor(uri, *args, **kwargs) -> QueueMonitor:
     options = parse_uri(uri)
-    return monitor_factory.get(options.get('scheme'))(uri, *args, **kwargs)
+    return _maybe(monitor_factory, options.get('scheme'))(uri, *args, **kwargs)
 
 
 def main(name):
