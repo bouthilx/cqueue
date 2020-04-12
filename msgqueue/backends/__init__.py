@@ -16,6 +16,7 @@ def make_delayed_import_error(error):
 def fetch_factories(base_module, base_file_name, function_name):
     factories = {}
     module_path = os.path.dirname(os.path.abspath(base_file_name))
+
     for module_path in glob(os.path.join(module_path, '[A-Za-z]*')):
         module_file = module_path.split(os.sep)[-1]
 
@@ -24,6 +25,7 @@ def fetch_factories(base_module, base_file_name, function_name):
 
         module_name = module_file.split(".py")[0]
 
+        print(module_name)
         try:
             module = __import__(".".join([base_module, module_name]), fromlist=[''])
 
@@ -56,7 +58,7 @@ def _maybe(dictionary, key):
     fun = dictionary.get(key)
 
     if fun is None:
-        raise KeyError(f'{key} backend was not found; pick among the known backends: {list(dictionary.keys())}')
+        raise KeyError(f'`{key}` backend was not found; pick among the known backends: {list(dictionary.keys())}')
 
     return fun
 

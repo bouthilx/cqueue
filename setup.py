@@ -24,6 +24,8 @@ if __name__ == '__main__':
         packages=[
             'msgqueue',
             'msgqueue.backends',
+            'msgqueue.backends.cockroach',
+            'msgqueue.backends.mongo',
         ],
         install_requires=[
             'dataclasses',
