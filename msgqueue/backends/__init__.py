@@ -25,7 +25,6 @@ def fetch_factories(base_module, base_file_name, function_name):
 
         module_name = module_file.split(".py")[0]
 
-        print(module_name)
         try:
             module = __import__(".".join([base_module, module_name]), fromlist=[''])
 

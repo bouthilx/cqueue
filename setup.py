@@ -27,10 +27,6 @@ if __name__ == '__main__':
             'msgqueue.backends.cockroach',
             'msgqueue.backends.mongo',
         ],
-        install_requires=[
-            'dataclasses',
-            'typing',
-        ],
         data_files=data,
         setup_requires=['setuptools'],
         tests_require=['pytest', 'flake8', 'codecov', 'pytest-cov'],
