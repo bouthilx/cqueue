@@ -42,6 +42,8 @@ class Message:
     message: str                    # User data
     retry: int                      # Number of time it has been retried
     error: str                      # Error if any
+    namespace: str = None           # Namespace the message is coming from
+    heartbeat: datetime = None      # Last time we had a proof of life
 
     def __repr__(self):
         return f"""Message({self.uid}, {self.time}, {self.mtype}, {self.read}, """ +\
@@ -74,18 +76,26 @@ class _Buffer:
 
 
 class QueueServer:
-    pass
+    def __init__(self, uri, database):
+        self.uri = uri
+        self.database = database
+
+    def start(self, wait=True):
+        raise NotImplementedError()
+
+    def stop(self):
+        raise NotImplementedError()
 
 
 class QueuePacemaker(threading.Thread):
-    def __init__(self, agent, namespace, wait_time, capture):
+    def __init__(self, agent, wait_time, capture):
         threading.Thread.__init__(self)
-        self.namespace = namespace
         self.stopped = threading.Event()
         self.wait_time = wait_time
         self.agent = agent
         self.agent_id = None
         self.capture = capture
+        self.message = None
         if capture:
             self.capture_output()
 
@@ -143,11 +153,15 @@ class QueuePacemaker(threading.Thread):
 
 
 class MessageQueue:
-    def pacemaker(self, namespace, wait_time, capture):
+    def __init__(self, uri, database):
+        self.uri = uri
+        self.database = database
+
+    def pacemaker(self, wait_time, capture):
         raise NotImplementedError()
 
     def __enter__(self):
-        self.heartbeat_monitor = self.pacemaker(self.namespace, self.timeout, self.capture)
+        self.heartbeat_monitor = self.pacemaker(self.timeout, self.capture)
         self.heartbeat_monitor.register_agent(self.name)
         self.heartbeat_monitor.start()
         return self
@@ -160,13 +174,19 @@ class MessageQueue:
     def join(self):
         return self.heartbeat_monitor.join()
 
-    def enqueue(self, name, message, mtype=0, replying_to=None):
+    def monitor(self):
+        raise NotImplementedError()
+
+    def enqueue(self, queue, namespace, message, mtype=0, replying_to=None):
         """Insert a new message inside the queue
 
         Parameters
         ----------
         name: str
-            Message queue namespace
+            Message queue name
+
+        namespace: str
+            Namespace of the message
 
         message: str
             message to insert
@@ -179,25 +199,28 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def dequeue(self, name, mtype: Union[int, List[int]] = None):
+    def dequeue(self, queue, namespace, mtype: Union[int, List[int]] = None):
         """Remove oldest message from the queue i.e mark is as read
 
         Parameters
         ----------
-        name: str
+        queue: str
             Queue namespace to pop message from
+
+        namespace: str
+            Namespace of the message, can be None to dequeue for all
 
         mtype: Union[int, List[int]
             type of message to look for (default: none)
         """
         raise NotImplementedError()
 
-    def mark_actioned(self, name, message: Union[Message, int]):
+    def mark_actioned(self, queue, message: Union[Message, int]):
         """Mark a message as actioned
 
         Parameters
         ----------
-        name: str
+        queue: str
             Message queue namespace
 
         message: Union[Message, int]
@@ -206,21 +229,21 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
-    def mark_error(self, name, message, error):
+    def mark_error(self, queue, message, error):
         raise NotImplementedError()
 
-    def push(self, name, message, mtype=0, replying_to=None):
-        return self.enqueue(name, message, mtype, replying_to)
+    def push(self, *args, **kwargs):
+        return self.enqueue(*args, **kwargs)
 
-    def pop(self, name, mtype: Union[int, List[int]] = None):
-        return self.dequeue(name, mtype)
+    def pop(self, *args, **kwargs):
+        return self.dequeue(*args, **kwargs)
 
-    def get_reply(self, name, message: Union[int, List[int]]):
+    def get_reply(self, queue, message: Union[int, List[int]]):
         raise NotImplementedError()
 
-    def _register_message(self, name, msg):
+    def _register_message(self, queue, msg):
         if self.heartbeat_monitor:
-            return self.heartbeat_monitor.register_message(name, msg)
+            return self.heartbeat_monitor.register_message(queue, msg)
 
         return msg
 
@@ -229,10 +252,14 @@ class MessageQueue:
             return self.heartbeat_monitor.unregister_message(uid)
 
     def _queue_exist(self, queue):
-        return self.namespace in self.monitor().namespaces() and queue in self.monitor().queues(self.namespace)
+        return queue in self.monitor().queues()
 
 
 class QueueMonitor:
+    def __init__(self, uri, database):
+        self.uri = uri
+        self.database = database
+
     def archive(self, namespace, archive_name, namespace_out=None, format='json'):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise NotImplementedError()
@@ -243,61 +270,57 @@ class QueueMonitor:
     def queues(self, namespace):
         raise NotImplementedError()
 
-    def agents(self, namespace):
+    def agents(self):
         raise NotImplementedError()
 
-    def clear(self, namespace, name):
+    def clear(self, name, namespace):
         """Clear the queue by removing all messages"""
         raise NotImplementedError()
 
-    def messages(self, namespace, name, limit=100):
+    def messages(self, name, namespace, limit=100):
         raise NotImplementedError()
 
-    def unread_messages(self, namespace, name):
+    def unread_messages(self, name, namespace):
         raise NotImplementedError()
 
-    def unactioned_messages(self, namespace, name):
+    def unactioned_messages(self, name, namespace):
         raise NotImplementedError()
 
-    def unread_count(self, namespace, name):
+    def unread_count(self, name, namespace):
         raise NotImplementedError()
 
-    def unactioned_count(self, namespace, name):
+    def unactioned_count(self, name, namespace):
         raise NotImplementedError()
 
-    def actioned_count(self, namespace, name):
+    def actioned_count(self, name, namespace):
         raise NotImplementedError()
 
-    def read_count(self, namespace, name):
+    def read_count(self, name, namespace):
         raise NotImplementedError()
 
-    def reset_queue(self, namespace, name):
+    def reset_queue(self, name, namespace):
         """Hard reset the queue, putting all unactioned messages into an unread state"""
         raise NotImplementedError()
 
-    def dead_agents(self, namespace, timeout_s=60):
-        """Return a list of unresponsive agent"""
-        raise NotImplementedError()
-
-    def lost_messages(self, namespace, timeout_s=60):
+    def lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
         """Return the list of messages that were assigned to worker that died"""
         raise NotImplementedError()
 
-    def requeue_lost_messages(self, namespace):
+    def requeue_lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
         raise NotImplementedError()
 
     def failed_messages(self, namespace, queue):
         """Return the list of messages that failed because of an exception was raised"""
         raise NotImplementedError()
 
-    def requeue_failed_messages(self, namespace, queue, max_retry):
+    def requeue_failed_messages(self, queue, namespace, max_retry=3):
         raise NotImplementedError()
 
-    def log(self, namespace, agent: Union[Agent, int], ltype: int = 0):
+    def log(self, agent: Union[Agent, int], ltype: int = 0):
         """Return the log of an agent"""
         raise NotImplementedError()
 
-    def reply(self, namespace, name, uid):
+    def reply(self, queue, uid):
         """Return the reply of a message"""
         raise NotImplementedError
 
@@ -328,21 +351,21 @@ class QueueMonitor:
         # archive logic
         with lock:
             with zipfile.ZipFile(archive_name, 'w') as archive:
-                queues = self.queues(namespace)
+                queues = self.queues()
 
                 for queue in set(queues):
                     with archive.open(f'{namespace_out}/{queue}.{format}', 'w') as queue_archive:
-                        messages = self.messages(namespace, queue)
+                        messages = self.messages(queue, namespace)
                         dumper(messages, queue_archive)
 
                 with archive.open(f'{namespace_out}/system.{format}', 'w') as system_archive:
-                    agents = self.agents(namespace)
+                    agents = self.agents()
                     dumper(agents, system_archive)
 
                 for agent in agents:
                     for type in log_types(namespace, agent):
                         with archive.open(f'{namespace_out}/logs/{agent.uid}_{type}.txt', 'w') as logs_archive:
-                            log = self.log(namespace, agent, type)
+                            log = self.log(agent, type)
                             _Wrapper(logs_archive).write(log)
 
             if remove_db:

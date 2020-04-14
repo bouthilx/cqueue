@@ -17,7 +17,7 @@ def mongo_to_dict(a):
 
 
 class MongoQueueMonitor(QueueMonitor):
-    def __init__(self, uri=None, cursor=None):
+    def __init__(self, database, uri=None, cursor=None):
         # When using this inside a dashbord it is executed in a multi threaded environment
         # You need to lock the cursor to not get some errors
         self.lock = RLock()
@@ -28,22 +28,25 @@ class MongoQueueMonitor(QueueMonitor):
         else:
             self.client = cursor
 
+        self.database = database
+        self.db = self.client[self.database]
+
     def namespaces(self):
         with self.lock:
-            return list(n['namespace'] for n in self.client.qsystem.namespaces.find({}))
+            return list(set(n['namespace'] for n in self.db.namespaces.find({})))
 
-    def queues(self, namespace):
+    def queues(self):
         with self.lock:
-            return list(n['name'] for n in self.client.qsystem.namespaces.find({'namespace': namespace}))
+            return list(set(n['name'] for n in self.db.namespaces.find()))
 
-    def reply(self, namespace, name, uid):
+    def reply(self, name, uid):
         with self.lock:
-            msg = self.client[namespace][name].find_one(
-                {'replying_to': uid},
-            )
+            msg = self.db[name].find_one({
+                'replying_to': uid
+            })
             return _parse(msg)
 
-    def messages(self, namespace, name, limit=100):
+    def messages(self, name, namespace, limit=100):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -52,47 +55,75 @@ class MongoQueueMonitor(QueueMonitor):
                 return data
 
             return [
-                _parse(msg) for msg in self.client[namespace][name].find({})]
+                _parse(msg) for msg in self.db[name].find({'namespace': namespace})]
 
-    def clear(self, namespace, name):
+    def clear(self, name, namespace):
         with self.lock:
-            self.client[namespace][name].drop()
+            self.db[name].remote({'namespace': namespace})
 
-    def unread_messages(self, namespace, name):
-        with self.lock:
-            return [
-                _parse(msg) for msg in self.client[namespace][name].find({'read': False})]
-
-    def unactioned_messages(self, namespace, name):
+    def unread_messages(self, name, namespace):
         with self.lock:
             return [
-                _parse(msg) for msg in self.client[namespace][name].find({'actioned': False, 'read': True})]
+                _parse(msg) for msg in self.db[name].find({
+                    'read': False,
+                    'namespace': namespace
+                })]
 
-    def unread_count(self, namespace, name):
+    def unactioned_messages(self, name, namespace):
         with self.lock:
-            return self.client[namespace][name].count({'read': False})
+            return [
+                _parse(msg) for msg in self.db[name].find({
+                    'actioned': False,
+                    'read': True,
+                    'namespace': namespace
+                })]
 
-    def unactioned_count(self, namespace, name):
+    def unread_count(self, name, namespace):
         with self.lock:
-            return self.client[namespace][name].count({'actioned': False, 'read': True})
+            return self.db[name].count({
+                'read': False,
+                'namespace': namespace
+            })
 
-    def read_count(self, namespace, name):
+    def unactioned_count(self, name, namespace):
         with self.lock:
-            return self.client[namespace][name].count({'read': True})
+            return self.db[name].count({
+                'actioned': False,
+                'read': True,
+                'namespace': namespace
+            })
 
-    def actioned_count(self, namespace, name):
+    def read_count(self, name, namespace):
         with self.lock:
-            return self.client[namespace][name].count({'actioned': True})
+            return self.db[name].count({
+                'read': True,
+                'namespace': namespace
+            })
+
+    def actioned_count(self, name, namespace):
+        with self.lock:
+            return self.db[name].count({
+                'actioned': True,
+                'namespace': namespace
+            })
 
     def agent_count(self, namespace):
         with self.lock:
-            return self.client[namespace].system.count()
+            return self.db.system.count({
+                'namespace': namespace
+            })
 
-    def reset_queue(self, namespace, name):
+    def reset_queue(self, name, namespace):
         with self.lock:
-            msgs = self.client[namespace][name].find({'actioned': False, 'read':  True})
-            rc = self.client[namespace][name].update_many(
+            msgs = self.db[name].find({
+                'actioned': False,
+                'read':  True,
+                'namespace': namespace
+            })
+
+            rc = self.db[name].update_many(
                 {'actioned': False},
+                {'namespace': namespace},
                 {'$set': {
                     'read': False, 'read_time': None}
                 }
@@ -104,22 +135,26 @@ class MongoQueueMonitor(QueueMonitor):
 
             return items
 
-    def unactioned(self, namespace, name):
+    def unactioned(self, name, namespace):
         with self.lock:
-            return [_parse(msg) for msg in self.client[namespace][name].find({'actioned': False})]
+            return [_parse(msg) for msg in self.db[name].find({
+                'actioned': False,
+                'namespace': namespace
+            })]
 
-    def dump(self, namespace, name):
-        rows = self.client[namespace][name].find()
+    def dump(self, name, namespace):
+        rows = self.db[name].find({'namespace': namespace})
         for row in rows:
             print(_parse(row))
 
-    def agents(self, namespace):
+    def agents(self):
         with self.lock:
-            agents = self.client[namespace].system.find()
+            agents = self.db.system.find()
             return [_parse_agent(agent) for agent in agents]
 
     def dead_agents(self, namespace, timeout_s=60):
-        agents = self.client[namespace].system.find({
+        agents = self.db.system.find({
+            'namespace': namespace,
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
             },
@@ -130,73 +165,89 @@ class MongoQueueMonitor(QueueMonitor):
 
         return [_parse_agent(agent) for agent in agents]
 
-    def lost_messages(self, namespace, timeout_s=60):
-        agents = self.client[namespace].system.find({
+    def _lost_query(self, namespace, timeout_s=60):
+        query = {
+            'read': True,
+            'actioned': False,
             'heartbeat': {
                 '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
-            },
-            'message': {
-                '$ne': None
             }
-        })
+        }
 
-        msg = []
-        for a in agents:
-            msg.append((a.queue, a.message))
+        if namespace is not None:
+            query['namespace'] = namespace
 
-        return msg
+        return query
 
-    def requeue_lost_messages(self, namespace, timeout_s=60, max_retry=3):
-        lost = self.lost_messages(namespace, timeout_s)
-        for queue, message in lost:
-            self.client[namespace][queue].update({
-                '_id': message.uid,
-                'read': True,
-                'actioned': False,
-                'retry': {'$lt': max_retry}
-            }, {
-                'read': {'$set': False},
-                'read_time': {'$set': None},
-                'error': {'$set': None},
-                '$inc': {
-                    'retry': 1
-                }
-            })
+    def lost_messages(self, queue, namespace, timeout_s=60):
+        lost = self.db[queue].find(self._lost_query(namespace, timeout_s))
+        return [_parse(msg) for msg in lost]
 
-    def failed_messages(self, namespace, queue):
-        failed = self.client[namespace][queue].find({
-            'error': {'$ne': None}
-        })
-        return [_parse(m) for m in failed]
+    def requeue_lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
+        query = self._lost_query(namespace, timeout_s)
+        query['retry'] = {
+            '$lt': max_retry
+        }
 
-    def requeue_failed_messages(self, namespace, queue, max_retry=3):
-        self.client[namespace][queue].update({
-            'error': {'$ne': None},
-            'actioned': False,
-            'read': True,
-            'retry': {'$lt': max_retry}
-        }, {
-            'read': {'$set': False},
-            'read_time': {'$set': None},
-            'error': {'$set': None},
+        self.db[queue].update_many(query, {
+            '$set': {
+                'read': False,
+                'read_time': None,
+                'error': None,
+            },
             '$inc': {
                 'retry': 1
             }
         })
 
-    def log(self, namespace, agent, ltype=0):
+    def _failed_query(self, namespace):
+        query = {
+            'error': {'$ne': None},
+            'actioned': False,
+            'read': True,
+        }
+
+        if namespace is not None:
+            query['namespace'] = namespace
+
+        return query
+
+    def failed_messages(self, queue, namespace):
+        failed = self.db[queue].find(self._failed_query(namespace))
+        return [_parse(m) for m in failed]
+
+    def requeue_failed_messages(self, queue, namespace, max_retry=3):
+        query = self._failed_query(namespace)
+        query['retry'] = {
+            '$lt': max_retry
+        }
+
+        result = self.db[queue].update_many(query, {
+            '$set': {
+                'read': False,
+                'read_time': None,
+                'error': None,
+            },
+            '$inc': {
+                'retry': 1
+            }
+        })
+        return result.modified_count
+
+    def log(self, agent, ltype=0):
         from bson import ObjectId
         if isinstance(agent, Agent):
             agent = agent.uid
 
-        lines = self.client[namespace].logs.find({
+        lines = self.db.logs.find({
             'agent': ObjectId(agent),
             'ltype': ltype
         })
         return ''.join([l['line'] for l in lines])
 
     def _log_types(self, namespace, agent):
-        data = self.client[namespace].logs.find({
+        data = self.db.logs.find({
+            'namespace': namespace,
             'agent': agent.uid
         })
 

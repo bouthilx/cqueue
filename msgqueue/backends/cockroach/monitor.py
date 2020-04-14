@@ -8,9 +8,10 @@ from .util import _parse, _parse_agent
 
 
 class CKQueueMonitor(QueueMonitor):
-    def __init__(self, uri=None, cursor=None, lock=None):
+    def __init__(self, database, uri=None, cursor=None, lock=None):
         # When using this inside a dashbord it is executed in a multi threaded environment
         # You need to lock the cursor to not get some errors
+        self.database = database
 
         if cursor is None:
             uri = parse_uri(uri)
@@ -39,42 +40,29 @@ class CKQueueMonitor(QueueMonitor):
 
         return records
 
-    def dump(self, namespace, name):
+    def dump(self, name, namespace):
         self.cursor.execute(f'SELECT *  FROM {namespace}.{name}')
 
         rows = self.cursor.fetchall()
         for row in rows:
             print(_parse(row))
 
-    def namespaces(self):
-        with self.lock:
-            self.cursor.execute(f"""
-            SELECT
-                namespace
-            FROM qsystem.namespaces;
-            """)
-
-            return [n[0] for n in self.cursor.fetchall()]
-
-    def queues(self, namespace):
+    def queues(self):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
                 name
-            FROM qsystem.namespaces
-            WHERE
-                namespace = %s
-            ;
-            """, (namespace,))
+            FROM {self.database}.qsystem;
+            """)
 
-            return [n[0] for n in self.cursor.fetchall()]
+            return list(set(n[0] for n in self.cursor.fetchall()))
 
-    def _log_types(self, namespace, agent):
+    def _log_types(self, agent):
         self.cursor.execute(f"""
             SELECT 
                 ltype 
             FROM 
-                {namespace}.logs
+                {self.database}.logs
             WHERE
                 agent = {agent.uid}
             """)
@@ -98,40 +86,13 @@ class CKQueueMonitor(QueueMonitor):
             self.lock
         )
 
-        # # TODO create partition per namespace
-        # self.cursor.execute(f"""
-        # SELECT
-        #   tablename as table
-        # FROM
-        #   pg_tables
-        # WHERE schemaname = '{namespace}'
-        # """)
-        #
-        # names = [n for n in self.cursor.fetchall()]
-        # for table in names:
-        #     if table == 'system':
-        #         continue
-        #
-        #     self.cursor.execute(f"""
-        #     INSERT INTO archive.messages
-        #         SELECT
-        #             {namespace},
-        #             {table},
-        #             *
-        #         FROM {namespace}.{table};
-        #     """)
-        #
-        # self.cursor.execute(f"""
-        # DROP DATABASE IF EXISTS {namespace}
-        # """)
-
-    def clear(self, namespace, name):
+    def clear(self, name, namespace):
         with self.lock:
             query = f"""DELETE FROM {namespace}.{name}"""
             self.cursor.execute(query)
             self.cursor.execute("DELETE FROM qsystem.namespaces WHERE namespace = %s", (namespace,))
 
-    def messages(self, namespace, name, limit=None):
+    def messages(self, name, namespace, limit=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -143,7 +104,7 @@ class CKQueueMonitor(QueueMonitor):
             SELECT 
                 * 
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             """
             if limit is not None:
                 query = f'{query} LIMIT {limit}'
@@ -151,90 +112,96 @@ class CKQueueMonitor(QueueMonitor):
             self.cursor.execute(query)
             return self._fetch_all()
 
-    def unread_messages(self, namespace, name):
+    def unread_messages(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 * 
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
-                read = false
-            """)
+                read = false AND
+                namespace = %s
+            """, (namespace,))
 
             return self._fetch_all()
 
-    def unactioned_messages(self, namespace, name):
+    def unactioned_messages(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 * 
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
                 read = true        AND
-                actioned = false
-            """)
+                actioned = false AND
+                namespace = %s
+            """, (namespace,))
 
             return self._fetch_all()
 
-    def unread_count(self, namespace, name):
+    def unread_count(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
-                read = false
-            """)
+                read = false AND
+                namespace = %s
+            """, (namespace,))
 
             return self.cursor.fetchone()[0]
 
-    def unactioned_count(self, namespace, name):
+    def unactioned_count(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
                 read = true AND
-                actioned = false
-            """)
+                actioned = false AND
+                namespace = %s
+            """, (namespace,))
 
             return self.cursor.fetchone()[0]
 
-    def read_count(self, namespace, name):
+    def read_count(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
-                read = true
-            """)
+                read = true AND
+                namespace = %s
+            """, (namespace,))
 
             return self.cursor.fetchone()[0]
 
-    def actioned_count(self, namespace, name):
+    def actioned_count(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
-                actioned = true
-            """)
+                actioned = true AND
+                namespace = %s
+            """, (namespace,))
 
             return self.cursor.fetchone()[0]
 
-    def reset_queue(self, namespace, name):
+    def reset_queue(self, name, namespace):
         with self.lock:
             self.cursor.execute(f"""
-            UPDATE {namespace}.{name}
+            UPDATE {self.database}.{name}
                 SET 
                     (read, read_time) = (false, null)
                 WHERE 
@@ -249,7 +216,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return records
 
-    def reply(self, namespace, name, uid):
+    def reply(self, name, uid):
         if isinstance(uid, Message):
             uid = uid.uid
 
@@ -258,49 +225,36 @@ class CKQueueMonitor(QueueMonitor):
             SELECT 
                 * 
             FROM 
-                {namespace}.{name}
+                {self.database}.{name}
             WHERE 
-                replying_to = %s
+                replying_to = %s AND
             """, (uid,))
 
             return _parse(self.cursor.fetchone())
 
-    def agents(self, namespace):
+    def agents(self):
         with self.lock:
             self.cursor.execute(f"""
             SELECT 
                 *
             FROM
-                {namespace}.system
+                {self.database}.system
             """)
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
 
-    def dead_agents(self, namespace, timeout_s=60):
+    def lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
                 *
             FROM
-                {namespace}.system
+                {self.database}.{queue}
             WHERE
-                alive = true                                        AND
+                namespace = %s      AND
+                retry < {max_retry} AND
                 current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
-            """)
-
-            return [_parse_agent(agent) for agent in self.cursor.fetchall()]
-
-    def lost_messages(self, namespace, timeout_s=60):
-        with self.lock:
-            self.cursor.execute(f"""
-            SELECT
-                *
-            FROM
-                {namespace}.system
-            WHERE
-                message != NULL                                     AND
-                current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'
-            """)
+            """, (namespace,))
 
             agents = [_parse_agent(agent) for agent in self.cursor.fetchall()]
 
@@ -310,45 +264,78 @@ class CKQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_lost_messages(self, namespace, timeout_s=60, max_retry=3):
-        lost = self.lost_messages(namespace, timeout_s)
-
+    def requeue_lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
         with self.lock:
-            for queue, message in lost:
-                self.cursor.execute(f"""
-                UPDATE {namespace}.{queue}
-                SET 
-                    (read, read_time, error, retry) = (false, null, null, retry + 1)
-                WHERE
-                    uid      = %s    AND
-                    read     = true  AND
-                    actioned = false AND
-                    retry    < %s
-                """, (message.uid, max_retry))
+            constraint = ''
+            args = tuple()
 
-    def failed_messages(self, namespace, queue):
+            if namespace is not None:
+                constraint = 'AND namespace = %s'
+                args = (namespace,)
+
+            self.cursor.execute(f"""
+               UPDATE {self.database}.{queue}
+               SET 
+                   (read, read_time, error, retry) = (false, null, null, retry + 1)
+               WHERE
+                   read     = true  AND
+                   actioned = false AND
+                   retry    < %s    AND
+                   current_timestamp() - heartbeat >  {timeout_s} * interval '1 second'         
+                   {constraint}
+               RETURNING uid
+               """, (max_retry,) + args)
+
+            return len([i for i in self.cursor.fetchall()])
+
+    def failed_messages(self, queue, namespace):
         with self.lock:
+            constraint = ''
+            args = tuple()
+
+            if namespace is not None:
+                constraint = 'AND namespace = %s'
+                args = (namespace,)
+
             self.cursor.execute(f"""
             SELECT *
-            FROM {namespace}.{queue}
+            FROM {self.database}.{queue}
             WHERE
-                error   != null
-            """)
+                read     = true  AND
+                actioned = false AND
+                error    IS NOT NULL
+                {constraint}
+            """, args)
 
-    def requeue_failed_messages(self, namespace, queue, max_retry=3):
+            return self._fetch_all()
+
+    def requeue_failed_messages(self, queue, namespace, max_retry=3):
         with self.lock:
-            self.cursor.execute(f"""
-            UPDATE {namespace}.{queue}
+            constraint = ''
+            args = tuple()
+
+            if namespace is not None:
+                constraint = 'AND namespace = %s'
+                args = (namespace,)
+
+
+            query = f"""
+            UPDATE {self.database}.{queue}
             SET 
                 (read, read_time, error, retry) = (false, null, null, retry + 1)
             WHERE
                 read     = true  AND
                 actioned = false AND
                 retry    < %s    AND
-                error   != null
-            """, (max_retry,))
+                error    IS NOT NULL
+                {constraint}
+            RETURNING uid
+            """
 
-    def log(self, namespace, agent, ltype=0):
+            self.cursor.execute(query, (max_retry,) + args)
+            return len([i for i in self.cursor.fetchall()])
+
+    def log(self, agent, ltype=0):
         if isinstance(agent, Agent):
             agent = agent.uid
 
@@ -357,9 +344,9 @@ class CKQueueMonitor(QueueMonitor):
             SELECT 
                 line
             FROM 
-                {namespace}.logs
+                {self.database}.logs
             WHERE
-                agent = %s AND
+                agent = %s       AND
                 ltype = %s
             """, (agent, ltype))
 

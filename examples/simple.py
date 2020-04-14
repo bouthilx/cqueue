@@ -2,13 +2,14 @@ from msgqueue import new_server, new_client
 from msgqueue.worker import BaseWorker
 from msgqueue.worker import WORKER_JOIN, WORK_ITEM, RESULT_ITEM, WORKER_LEFT, SHUTDOWN
 
+DB = 'example'
 result = 'result'
 work = 'work'
 
 
 class WorkerReceiver(BaseWorker):
     def __init__(self, uri, namespace, id):
-        super(WorkerReceiver, self).__init__(uri, namespace, id, work, result)
+        super(WorkerReceiver, self).__init__(uri, DB, namespace, id, work, result)
         self.new_handler(WORK_ITEM, self.increment)
         self.new_handler(WORKER_JOIN, self.ignore_message)
 
@@ -31,7 +32,7 @@ class WorkerReceiver(BaseWorker):
 
 class ResultReceiver(BaseWorker):
     def __init__(self, uri, namespace):
-        super(ResultReceiver, self).__init__(uri, namespace, 'receiver', result, work)
+        super(ResultReceiver, self).__init__(uri, DB, namespace, 'receiver', result, work)
         self.new_handler(WORKER_JOIN, self.worker_join)
         self.new_handler(RESULT_ITEM, self.read_results)
         self.new_handler(WORKER_LEFT, self.worker_left)
@@ -62,19 +63,16 @@ if __name__ == '__main__':
     uri = 'mongo://0.0.0.0:8123'
 
     # start the message broker
-    broker = new_server(uri)
+    broker = new_server(uri, DB)
     broker.start()
 
     # create new queues
     namespace = 'example'
 
-    broker.new_queue(namespace, work)
-    broker.new_queue(namespace, result)
-
     # queue work to be done
-    with new_client(uri, namespace) as task_master:
+    with new_client(uri, DB) as task_master:
         for i in range(0, 100):
-            task_master.push(work, message={'value': i}, mtype=WORK_ITEM)
+            task_master.push(work, namespace, message={'value': i}, mtype=WORK_ITEM)
 
     workers = [
         WorkerReceiver.async_worker(uri, namespace, w) for w in range(0, 10)

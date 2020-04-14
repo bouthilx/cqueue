@@ -13,10 +13,10 @@ backends = known_backends()
 def test_server_start_stop(backend):
     """Make sure the server is able to start and stop without hanging"""
     print(backend)
-    server = new_server(uri=f'{backend}://test_user:pass123@localhost:8123')
+    server = new_server(uri=f'{backend}://test_user:pass123@localhost:8123', database='TESTDB')
     server.start(wait=True)
 
-    server.new_queue('namespace', 'qeueu')
+    # server.new_queue('namespace', 'qeueu')
     time.sleep(1)
     server.stop()
 

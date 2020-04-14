@@ -74,7 +74,7 @@ def track_schema(clients):
     );""".encode('utf8')
 
 
-def system_schema(clients):
+def system_schema(clients, db_name):
     user = []
     for client in clients:
         user.append(f'CREATE USER IF NOT EXISTS {client};')
@@ -82,51 +82,59 @@ def system_schema(clients):
 
     permissions = []
     for client in clients:
-        permissions.append(f'GRANT ALL ON DATABASE archive TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE archive.messages TO {client};')
-        permissions.append(f'GRANT ALL ON DATABASE qsystem TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE qsystem.namespaces TO {client};')
+        permissions.append(f'GRANT ALL ON DATABASE {db_name} TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.qsystem TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.system TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.logs TO {client};')
+
     permissions = '\n'.join(permissions)
 
     return f"""
-    {user}
-    CREATE DATABASE IF NOT EXISTS qsystem;
-    CREATE TABLE IF NOT EXISTS qsystem.namespaces (
+    CREATE DATABASE IF NOT EXISTS {db_name};
+
+    CREATE TABLE IF NOT EXISTS {db_name}.system (
+        uid             SERIAL      PRIMARY KEY,
+        time            TIMESTAMP   DEFAULT current_timestamp(),
+        agent           JSONB,
+        heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
+        alive           BOOLEAN     DEFAULT true,
+        message         INTEGER,
+        queue           character(64)
+    );
+    CREATE TABLE IF NOT EXISTS {db_name}.qsystem (
         namespace       character(64),
         name            character(64)
     );
-
-    CREATE DATABASE IF NOT EXISTS archive;
-    SET DATABASE = archive;
-    CREATE TABLE IF NOT EXISTS archive.messages (
-        namespace       character(64),
-        name            character(64),
-        uid             INTEGER,
-        time            TIMESTAMP   DEFAULT current_timestamp(),
-        mtype           INT,
-        read            BOOLEAN,
-        read_time       TIMESTAMP,
-        actioned        BOOLEAN,
-        actioned_time   TIMESTAMP,
-        replying_to     INTEGER,
-        message         JSONB
+    CREATE TABLE IF NOT EXISTS {db_name}.logs (
+        uid             SERIAL      PRIMARY KEY,
+        agent           INTEGER,
+        ltype           INT,
+        line            JSONB,
+        namespace       character(64)
     );
 
-    CREATE INDEX IF NOT EXISTS archive_messages_index
-    ON archive.messages  (
-        namespace   DESC,
-        name        DESC,
-        read        DESC, 
-        time        DESC,
-        actioned    DESC,
-        mtype       ASC,
-        replying_to DESC
+    CREATE INDEX IF NOT EXISTS system_index
+    ON {db_name}.system (
+        uid         ASC,
+        message     ASC,
+        queue       ASC
     );
+
+    CREATE INDEX IF NOT EXISTS logs_index
+    ON {db_name}.logs (
+        uid         ASC,
+        ltype       ASC,
+        agent       ASC
+    );
+
+    {user}
     {permissions}
+
+    SET DATABASE = {db_name};
     """
 
 
-def message_queue_schema(clients, namespace, name):
+def message_queue_schema(clients, db_name, queue_name):
     """Create a message queue table
 
     uid          : message uid to update messages
@@ -137,21 +145,21 @@ def message_queue_schema(clients, namespace, name):
     actioned_time: when was the message actioned
     message      : the message
     """
-    assert name != 'system', 'system name is reserved'
-    assert name != 'logs', 'logs name is reserved'
+    assert queue_name != 'system', 'system name is reserved'
+    assert queue_name != 'logs', 'logs name is reserved'
 
     permissions = []
     for client in clients:
-        permissions.append(f'GRANT ALL ON DATABASE {namespace} TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE {namespace}.{name} TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE {namespace}.system TO {client};')
-        permissions.append(f'GRANT ALL ON TABLE {namespace}.logs TO {client};')
+        permissions.append(f'GRANT ALL ON DATABASE {db_name} TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.{queue_name} TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.system TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.qsystem TO {client};')
+        permissions.append(f'GRANT ALL ON TABLE {db_name}.logs TO {client};')
     permissions = '\n'.join(permissions)
 
     return f"""
-    CREATE DATABASE IF NOT EXISTS {namespace};
-    SET DATABASE = {namespace};
-    CREATE TABLE IF NOT EXISTS {namespace}.{name} (
+    SET DATABASE = {db_name};
+    CREATE TABLE IF NOT EXISTS {db_name}.{queue_name} (
         uid             SERIAL      PRIMARY KEY,
         time            TIMESTAMP   DEFAULT current_timestamp(),
         mtype           INT,
@@ -161,54 +169,47 @@ def message_queue_schema(clients, namespace, name):
         actioned_time   TIMESTAMP,
         replying_to     INTEGER,
         message         JSONB,
+        retry           INT,
         error           JSONB,
-        retry           INT
-    );
-    CREATE TABLE IF NOT EXISTS {namespace}.system (
-        uid             SERIAL      PRIMARY KEY,
-        time            TIMESTAMP   DEFAULT current_timestamp(),
-        agent           JSONB,
-        heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
-        alive           BOOLEAN     DEFAULT true,
-        message         INTEGER,
-        queue           character(64)
-    );
-    CREATE TABLE IF NOT EXISTS {namespace}.logs (
-        uid             SERIAL      PRIMARY KEY,
-        agent           INTEGER,
-        ltype           INT,
-        line            JSONB
+        namespace       character(64),
+        heartbeat       TIMESTAMP   DEFAULT current_timestamp()
     );
 
     CREATE INDEX IF NOT EXISTS messages_index
-    ON {namespace}.{name} (
+    ON {db_name}.{queue_name} (
         read        DESC, 
         time        DESC,
         actioned    DESC,
         mtype       ASC,
-        replying_to DESC
+        replying_to DESC,
+        namespace   DESC
     );
 
-    CREATE INDEX IF NOT EXISTS system_index
-    ON {namespace}.system (
-        uid         ASC,
-        message     ASC,
-        queue       ASC
-    );
-
-    CREATE INDEX IF NOT EXISTS logs_index
-    ON {namespace}.logs (
-        uid         ASC,
-        ltype       ASC,
-        agent       ASC
-    );
     {permissions}
-    INSERT INTO qsystem.namespaces(namespace, name) VALUES ('{namespace}', '{name}');
     """
 
 
-def new_queue(client, username, namespace, queue):
-    client.execute(message_queue_schema([username], namespace, queue))
+def new_queue(client, db_name, queue, namespace, username='root'):
+    """Create a new queue
+
+    Parameters
+    ----------
+    db_name: str
+        database name
+
+    queue_name: str
+        queue_name
+
+    clients: str
+        create permission for all the clients
+    """
+    client.execute(
+        message_queue_schema([username], db_name, queue))
+
+    client.execute(f"""
+    INSERT INTO {db_name}.qsystem (namespace, name)
+    VALUES (%s, %s)
+    """, (namespace, queue))
 
 
 class CockRoachDB(QueueServer):
@@ -218,7 +219,7 @@ class CockRoachDB(QueueServer):
     This spawn a cockroach node that will store its data in `location`
     """
 
-    def __init__(self, uri, location, join=None, clean_on_exit=True):
+    def __init__(self, uri, database, location, join=None, clean_on_exit=True):
         self.location = location
 
         logs = f'{location}/logs'
@@ -231,6 +232,7 @@ class CockRoachDB(QueueServer):
         os.makedirs(external, exist_ok=True)
 
         self.uri = parse_uri(uri)
+        self.database = database
         self.location = location
         self.bin = COCKROACH_BIN.get(os.name)
 
@@ -316,7 +318,7 @@ class CockRoachDB(QueueServer):
         password = self.uri.get('password', 'none')
 
         # create the first user and system tables
-        self._run_local_query(system_schema([username]))
+        self._run_local_query(system_schema([username], self.database))
 
         # -- Login if our new user
         self.client = psycopg2.connect(
@@ -340,21 +342,21 @@ class CockRoachDB(QueueServer):
             f'{self.bin} sql --insecure --host={self.addrs}', input=statement, shell=True)
         debug(out.decode('utf8').strip())
 
-    def new_queue(self, namespace, name, client='root'):
+    def new_queue(self, db_name, queue_name, namespace, client='root'):
         """Create a new queue
 
         Parameters
         ----------
-        name: str
-            create a new queue named `name`
+        db_name: str
+            database name
 
-        client: str
-            client name to use
+        queue_name: str
+            queue_name
 
         clients: str
             create permission for all the clients
         """
-        new_queue(self.cursor, client, namespace, name)
+        new_queue(self.client, db_name, queue_name, namespace, username='root')
 
     def stop(self):
         self.properties['running'] = False
@@ -421,8 +423,8 @@ class CockRoachDB(QueueServer):
         return self.properties.get('build')
 
 
-def new_server(uri, location, join=None, clean_on_exit=True):
-    cockroach = CockRoachDB(uri, location, join, clean_on_exit)
+def new_server(uri, database, location, join=None, clean_on_exit=True):
+    cockroach = CockRoachDB(uri, database, location, join, clean_on_exit)
     return cockroach
 
 

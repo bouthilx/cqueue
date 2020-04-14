@@ -9,12 +9,12 @@ from .server import new_queue
 
 
 class MongoQueuePacemaker(QueuePacemaker):
-    def __init__(self, agent, namespace, wait_time, capture):
-        self.client = agent.client
-        super(MongoQueuePacemaker, self).__init__(agent, namespace, wait_time, capture)
+    def __init__(self, agent, wait_time, capture):
+        self.client = agent.db
+        super(MongoQueuePacemaker, self).__init__(agent, wait_time, capture)
 
     def register_agent(self, agent_name):
-        self.agent_id = self.client[self.namespace].system.insert_one({
+        self.agent_id = self.client.system.insert_one({
             'time': datetime.datetime.utcnow(),
             'agent': agent_name,
             'heartbeat': datetime.datetime.utcnow(),
@@ -25,34 +25,30 @@ class MongoQueuePacemaker(QueuePacemaker):
         return self.agent_id
 
     def update_heartbeat(self):
-        self.client[self.namespace].system.update_one(
-            {'_id': self.agent_id},
-            {'$set': {
-                'heartbeat': datetime.datetime.utcnow()}
+        if self.message is not None:
+            self.client[self.name].update_one({
+                '_id': self.message.uid
+            }, {
+                '$set': {
+                    'heartbeat': datetime.datetime.utcnow()
+                }
             })
 
     def register_message(self, name, message):
         if message is None:
             return None
 
-        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
-            '$set': {
-                'message': message.uid,
-                'queue': name
-            }
-        })
+        self.name = name
+        self.message = message
+        self.update_heartbeat()
+
         return message
 
     def unregister_message(self, uid=None):
-        self.client[self.namespace].system.update_one({
-            '_id': self.agent_id,
-            'message': uid}, {
-            '$set': {
-                'message': None,
-                'queue': None}})
+        pass
 
     def unregister_agent(self):
-        self.client[self.namespace].system.update_one({'_id': self.agent_id}, {
+        self.client.system.update_one({'_id': self.agent_id}, {
             '$set': {'alive': False}
         })
 
@@ -60,7 +56,7 @@ class MongoQueuePacemaker(QueuePacemaker):
         if self.agent_id is None or self.client is None:
             return
 
-        self.client[self.namespace].logs.insert_one({
+        self.client.logs.insert_one({
             'agent': self.agent_id,
             'ltype': ltype,
             'line': line
@@ -73,30 +69,41 @@ class MongoClient(MessageQueue):
     Parameters
     ----------
     uri: str
-        mongodb://192.168.0.10:8123
+        mongo://192.168.0.10:8123
     """
 
-    def __init__(self, uri, namespace, name='worker', log_capture=True, timeout=60):
+    def __init__(self, uri, database, name='worker', log_capture=True, timeout=60):
+        mongodb_uri = uri.replace('mongo', 'mongodb')
         uri = parse_uri(uri)
         self.name = name
-        self.namespace = namespace
-        self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+
+        if uri.get('username') is not None:
+            self.client = pymongo.MongoClient(mongodb_uri)
+        else:
+            self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+
         self.heartbeat_monitor = None
         self.capture = log_capture
         self.timeout = timeout
+        self.database = database
+        self.db = self.client[self.database]
 
     def join(self):
         return self.heartbeat_monitor.join()
 
-    def pacemaker(self, namespace, wait_time, capture):
-        return MongoQueuePacemaker(self, namespace, wait_time, capture)
+    def pacemaker(self, wait_time, capture):
+        return MongoQueuePacemaker(self, wait_time, capture)
 
-    def enqueue(self, name, message, mtype=0, replying_to=None):
+    def _queue_exist(self, queue):
+        return queue in self.monitor().queues()
+
+    def enqueue(self, queue, namespace, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        if not self._queue_exist(name):
-            new_queue(self.client, self.namespace, name)
+        if not self._queue_exist(queue):
+            new_queue(self.db, namespace, queue)
 
-        return self.client[self.namespace][name].insert_one({
+        message = {
+            'namespace': namespace,
             'time': datetime.datetime.utcnow(),
             'mtype': mtype,
             'read': False,
@@ -107,11 +114,18 @@ class MongoClient(MessageQueue):
             'message': message,
             'retry': 0,
             'error': None
-        }).inserted_id
+        }
 
-    def dequeue(self, name, mtype=None):
+        return self.db[queue].insert_one(message).inserted_id
+
+    def dequeue(self, queue, namespace, mtype=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
-        query = {'read': False}
+        query = {
+            'read': False,
+        }
+
+        if namespace is not None:
+            query['namespace'] = namespace
 
         if isinstance(mtype, (list, tuple)):
             query['mtype'] = {'$in': list(mtype)}
@@ -119,23 +133,26 @@ class MongoClient(MessageQueue):
         elif isinstance(mtype, int):
             query['mtype'] = mtype
 
-        msg = self.client[self.namespace][name].find_one_and_update(
-            query,
-            {'$set': {
-                'read': True, 'read_time': datetime.datetime.utcnow()}
+        msg = self.db[queue].find_one_and_update(
+            query, {
+                '$set': {
+                    'read': True, 'read_time': datetime.datetime.utcnow()}
             },
+            sort=[
+                ('time', pymongo.ASCENDING),
+            ],
             return_document=pymongo.ReturnDocument.AFTER
         )
-        return self._register_message(name, _parse(msg))
+        return self._register_message(queue, _parse(msg))
 
-    def mark_actioned(self, name, uid: Message = None):
+    def mark_actioned(self, queue, uid: Message = None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         if isinstance(uid, Message):
             uid = uid.uid
 
-        self.client[self.namespace][name].find_one_and_update(
-            {'_id': uid},
-            {'$set': {
+        self.db[queue].find_one_and_update({
+            '_id': uid}, {
+            '$set': {
                 'actioned': True,
                 'actioned_time': datetime.datetime.utcnow()}
             }
@@ -143,28 +160,22 @@ class MongoClient(MessageQueue):
         self._unregister_message(uid)
         return uid
 
-    def mark_error(self, name, uid, error):
+    def mark_error(self, queue, uid, error):
         if isinstance(uid, Message):
             uid = uid.uid
 
-        self.client[self.namespace][name].find_one_and_update(
-            {'_id': uid},
-            {'$set': {
-                'error': error}
+        self.db[queue].find_one_and_update({
+            '_id': uid}, {
+                '$set': {
+                    'error': error}
             }
         )
         self._unregister_message(uid)
         return uid
 
-    def reply(self, name, uid):
-        if isinstance(uid, Message):
-            uid = uid.uid
-
-        return self.monitor().reply(self.namespace, name, uid)
-
     def monitor(self):
         from .monitor import MongoQueueMonitor
-        return MongoQueueMonitor(cursor=self.client)
+        return MongoQueueMonitor(self.database, cursor=self.client)
 
 
 def new_client(*args, **kwargs):

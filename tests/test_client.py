@@ -8,15 +8,21 @@ import shutil
 from itertools import product
 
 from msgqueue.logs import set_verbose_level
+set_verbose_level(10)
+
 from msgqueue.backends import known_backends, new_server
 from msgqueue.backends import new_client, new_monitor_process
 
-set_verbose_level(10)
+
 backends = known_backends()
 formats = ['json', 'bson']
 
 WORK_ITEM = 1
 RESULT_ITEM = 2
+
+DATABASE = 'TESTDB'
+NAMESPACE = 'TESTNAME'
+QUEUE = 'TESTQUEUE'
 
 
 def get_free_port():
@@ -29,15 +35,22 @@ def get_free_port():
 class Environment:
     def __init__(self, backend):
         port = get_free_port()
-        self.uri = f'{backend}://root:pass123@localhost:{port}'
+        # local db do not have user/pass
+        self.uri = f'{backend}://localhost:{port}'
         self.server = None
         self.client = None
-        self.namespace = 'testing_namespace'
+        self.namespace = NAMESPACE
 
     def __enter__(self):
-        self.server = new_server(uri=self.uri)
-        self.server.start(wait=True)
-        self.client = new_client(self.uri, self.namespace, 'client-test')
+        self.server = new_server(uri=self.uri, database=DATABASE)
+        try:
+            self.server.start(wait=True)
+        except Exception as e:
+            self.server.stop()
+            shutil.rmtree('/tmp/queue/', ignore_errors=True)
+            raise e
+
+        self.client = new_client(self.uri, DATABASE, 'client-test')
         self.monitor = self.client.monitor()
         return self
 
@@ -51,7 +64,7 @@ class Environment:
 def test_pop_empty_client(backend):
     with Environment(backend) as env:
         client = env.client
-        msg = client.pop('testing_queue')
+        msg = client.pop(QUEUE, NAMESPACE)
         assert msg is None
 
 
@@ -63,44 +76,47 @@ def test_pop_client(backend):
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
 
-        client.push('testing_queue', work_item, WORK_ITEM)
-        client.push('testing_queue', nothing_item, 0)
-        client.push('testing_queue', result_item, RESULT_ITEM)
+        client.push(QUEUE, NAMESPACE, work_item, WORK_ITEM)
+        client.push(QUEUE, NAMESPACE, nothing_item, 0)
+        client.push(QUEUE, NAMESPACE, result_item, RESULT_ITEM)
 
         with client:
-            name = env.monitor.namespaces()[0]
-            queue = env.monitor.queues(name)[0]
-            names = (name, queue)
-            assert names == (env.namespace, 'testing_queue')
+            # name = env.monitor.namespaces()[0]
+            queue = env.monitor.queues()[0]
 
-            msg = client.pop('testing_queue')
+            names = (queue, NAMESPACE)
+            # assert names == (QUEUE, env.namespace)
 
-            print('log to capture')
+            msg = client.pop(QUEUE, NAMESPACE)
+            assert msg is not None
+
+            print('log to capture', msg)
 
             assert env.monitor.read_count(*names) == 1
             assert env.monitor.unactioned_count(*names) == 1
 
-            client.mark_actioned('testing_queue', msg)
+            client.mark_actioned(QUEUE, msg)
 
             assert env.monitor.unactioned_count(*names) == 0
 
+            print(msg.message, work_item)
             assert msg.message == work_item, 'work_item was inserted first it needs to be first out'
             assert env.monitor.unread_count(*names) == 2
 
         time.sleep(1)
         # for coverage sake check the queries work
-        agents = env.monitor.agents(env.namespace)
-        print(agents)
+        agents = env.monitor.agents()
+        print('Agents:', agents)
 
-        print(env.monitor.dead_agents(env.namespace))
-        print(env.monitor.log(env.namespace, agents[0]), end='')
-        print(env.monitor.lost_messages(env.namespace))
-        print(env.monitor.requeue_lost_messages(env.namespace))
-        print(env.monitor.failed_messages(*names))
-        print(env.monitor.requeue_failed_messages(*names))
-        print(env.monitor.messages(*names))
-        print(env.monitor.unread_messages(*names))
-        print(env.monitor.unactioned_messages(*names))
+        # print('Dead Agents:', env.monitor.dead_agents(env.namespace))
+        print(env.monitor.log(agents[0]), end='')
+        print(env.monitor.lost_messages(QUEUE, NAMESPACE))
+        print(env.monitor.requeue_lost_messages(QUEUE, NAMESPACE))
+        print(env.monitor.failed_messages(QUEUE, NAMESPACE))
+        print(env.monitor.requeue_failed_messages(QUEUE, NAMESPACE))
+        print(env.monitor.messages(QUEUE, NAMESPACE))
+        print(env.monitor.unread_messages(QUEUE, NAMESPACE))
+        print(env.monitor.unactioned_messages(QUEUE, NAMESPACE))
 
 
 @pytest.mark.parametrize('backend,format', product(backends, formats))
@@ -111,12 +127,12 @@ def test_mtype_pop_client(backend, format):
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
 
-        client.push('testing_queue', work_item, WORK_ITEM)
-        client.push('testing_queue', nothing_item, 0)
-        client.push('testing_queue', result_item, RESULT_ITEM)
+        client.push(QUEUE, NAMESPACE, work_item, WORK_ITEM)
+        client.push(QUEUE, NAMESPACE, nothing_item, 0)
+        client.push(QUEUE, NAMESPACE, result_item, RESULT_ITEM)
 
-        msg = client.pop('testing_queue', RESULT_ITEM)
-        client.mark_actioned('testing_queue', msg)
+        msg = client.pop(QUEUE, NAMESPACE, RESULT_ITEM)
+        client.mark_actioned(QUEUE, msg)
         assert msg.message == result_item, 'result_item is the only message with the correct type'
         env.monitor.archive(
             env.namespace,
@@ -124,8 +140,8 @@ def test_mtype_pop_client(backend, format):
             namespace_out='new_namespace',
             format=format)
 
-    monitor = new_monitor_process(f'zip:test_{backend}.zip')
-    assert len(monitor.messages('new_namespace', 'testing_queue')) == 3
+    monitor = new_monitor_process(f'zip:test_{backend}.zip', DATABASE)
+    assert len(monitor.messages(QUEUE, 'new_namespace')) == 3
     os.remove(f'test_{backend}.zip')
     monitor.stop()
 
@@ -138,12 +154,12 @@ def test_union_pop_client(backend, format):
         work_item = {'json': 'work'}
         result_item = {'json': 'result'}
 
-        client.push('testing_queue', nothing_item, 0)
-        client.push('testing_queue', work_item, WORK_ITEM)
-        client.push('testing_queue', result_item, RESULT_ITEM)
+        client.push(QUEUE, NAMESPACE, nothing_item, 0)
+        client.push(QUEUE, NAMESPACE, work_item, WORK_ITEM)
+        client.push(QUEUE, NAMESPACE, result_item, RESULT_ITEM)
 
-        msg = client.pop('testing_queue', (WORK_ITEM, RESULT_ITEM))
-        client.mark_actioned('testing_queue', msg)
+        msg = client.pop(QUEUE, NAMESPACE, (WORK_ITEM, RESULT_ITEM))
+        client.mark_actioned(QUEUE, msg)
         assert msg.message == work_item, 'work_item was inserted first it needs to be first out'
 
         env.monitor.archive(
@@ -152,18 +168,19 @@ def test_union_pop_client(backend, format):
             namespace_out='new_namespace',
             format=format)
 
-    monitor = new_monitor_process(f'zip:test_{backend}.zip')
-    assert len(monitor.messages('new_namespace', 'testing_queue')) == 3
+    monitor = new_monitor_process(f'zip:test_{backend}.zip', DATABASE)
+    assert len(monitor.messages(QUEUE, 'new_namespace')) == 3
     os.remove(f'test_{backend}.zip')
     monitor.stop()
 
 
+@pytest.mark.skipif(True, reason='need a db with users')
+def test_user_pass():
+    uri = f'mongo://user:pass@127.0.0.1:27017'
+    client = new_client(uri, 'test')
+    client.push(QUEUE, NAMESPACE, 'test')
+    _ = client.pop(QUEUE, NAMESPACE)
+
+
 if __name__ == '__main__':
-    import traceback
-    for b in reversed(backends):
-        try:
-            print(b)
-            test_pop_client(b)
-            print('--')
-        except:
-            print(traceback.format_exc())
+    test_pop_client('mongo')

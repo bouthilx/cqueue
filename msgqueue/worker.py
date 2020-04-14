@@ -9,7 +9,6 @@ from msgqueue.backends.queue import MessageQueue, Message
 WORK_QUEUE = 'work'
 RESULT_QUEUE = 'result'
 
-
 WORKER_JOIN = 1     # Worker joined work group
 WORK_ITEM   = 2     # Worker received work item
 RESULT_ITEM = 3     # Worker pushing results
@@ -18,10 +17,26 @@ WORKER_LEFT = 5     # Worker left work group
 
 
 class BaseWorker:
-    def __init__(self, queue_uri, namespace, worker_id, work_queue, result_queue=None):
+    """
+
+    Parameters
+    ----------
+    namespaced: bool
+        if true prevent worker form picking up work from other queues
+
+    timeout: int
+        time without message after which the worker will shutdown by itself
+
+    max_retry: int
+        Number of time a message with an error will be retried before being dropped
+
+    result_queue: str
+        Name of the queue where the result are placed
+    """
+    def __init__(self, queue_uri, database, namespace, worker_id, work_queue, result_queue=None):
         self.uri = queue_uri
         self.namespace = namespace
-        self.client: MessageQueue = new_client(queue_uri, namespace)
+        self.client: MessageQueue = new_client(queue_uri, database)
         self.running = False
         self.work_id = worker_id
         self.broker = None
@@ -29,6 +44,9 @@ class BaseWorker:
         self.result_queue = result_queue
         self.context = {}
         self.client.name = f'worker-{self.work_id}'
+        self.namespaced = True
+        self.timeout = 5 * 60
+        self.max_retry = 3
         self.dispatcher = {
             SHUTDOWN: self.shutdown_worker
         }
@@ -49,25 +67,68 @@ class BaseWorker:
         self.dispatcher[message_type] = handler
 
     def pop_workitem(self):
-        return self.client.pop(self.work_queue)
+        workitem = None
+        wait_time = 0
+        namespace = None
+        if self.namespaced:
+            namespace = self.namespace
+
+        while workitem is None:
+            workitem = self.client.pop(self.work_queue, namespace)
+
+            if workitem is None:
+                time.sleep(0.01)
+                wait_time += 0.01
+
+            if wait_time > self.timeout:
+                self.shutdown_worker(None, None)
+                break
+
+        return workitem
+
+    def requeue(self):
+        namespace = None
+        if self.namespaced:
+            namespace = self.namespace
+
+        requeued = self.client.monitor().requeue_failed_messages(
+            self.work_queue, namespace, max_retry=self.max_retry)
+
+        info(f'Requeued {requeued} failed messages')
+
+        self.client.monitor().requeue_lost_messages(
+            self.work_queue, namespace, timeout_s=self.timeout, max_retry=self.max_retry)
 
     def push_result(self, result, mtype=RESULT_ITEM, replying_to=None):
-        return self.client.push(self.result_queue, message=result, mtype=mtype, replying_to=replying_to)
+        uid = None
+        namespace = self.namespace
+
+        if replying_to:
+            uid = replying_to.uid
+            namespace = replying_to.namespace
+
+        return self.client.push(
+            self.result_queue,
+            namespace,
+            result,
+            mtype=mtype,
+            replying_to=uid)
 
     def run(self):
         info('starting worker')
 
         self.running = True
-        self.client.push(self.result_queue, {}, mtype=WORKER_JOIN)
+        self.client.push(self.result_queue, self.namespace, {}, mtype=WORKER_JOIN)
 
         with self.client:
             while self.running:
+                # Check if messages were lost
+                self.requeue()
+
                 # This code should not throw
                 workitem = self.pop_workitem()
 
-                # wait for more work to come through
                 if workitem is None:
-                    time.sleep(0.01)
                     continue
 
                 handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
@@ -77,7 +138,7 @@ class BaseWorker:
                     result = handler(workitem, self.context)
 
                     if self.result_queue is not None and result is not None:
-                        self.push_result(result, replying_to=workitem.uid)
+                        self.push_result(result, replying_to=workitem)
 
                     self.client.mark_actioned(self.work_queue, workitem)
 
@@ -87,4 +148,4 @@ class BaseWorker:
                     self.client.mark_error(self.work_queue, workitem, error_str)
 
             # --
-            self.client.push(self.result_queue, {}, mtype=WORKER_LEFT)
+            self.client.push(self.result_queue, self.namespace, {}, mtype=WORKER_LEFT)

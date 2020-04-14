@@ -27,7 +27,7 @@ def bson_encode(x):
 
 
 class ZipQueueMonitor(QueueMonitor):
-    def __init__(self, uri):
+    def __init__(self, uri, database):
         uri = parse_uri(uri)
         self.lock = RLock()
         self.zip = zipfile.ZipFile(uri.get('path', uri.get('address', None)))
@@ -42,15 +42,15 @@ class ZipQueueMonitor(QueueMonitor):
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise RuntimeError('Already achieved')
 
-    def clear(self, namespace, name):
+    def clear(self, name, namespace):
         """Clear the queue by removing all messages"""
         raise RuntimeError('Archives are read-only')
 
-    def reset_queue(self, namespace, name):
+    def reset_queue(self, name, namespace):
         """Hard reset the queue, putting all unactioned messages into an unread state"""
         raise RuntimeError('Archives are read-only')
 
-    def requeue_lost_messages(self, namespace):
+    def requeue_lost_messages(self, *args):
         raise RuntimeError('Archives are read-only')
 
     @cached
@@ -103,14 +103,14 @@ class ZipQueueMonitor(QueueMonitor):
                 return list(Agent(**m) for m in self.loader(queue))
 
     @cached
-    def messages(self, namespace, name, limit=100):
+    def messages(self, name, namespace, limit=100):
         with self.lock:
             with self.zip.open(f'{namespace}/{name}.{self.format}', 'r') as queue:
                 m = list(self.build_index(namespace, name, Message(**m)) for m in self.loader(queue))
                 self.should_build_index[(namespace, name)] = False
                 return m
 
-    def build_index(self, namespace, name, message):
+    def build_index(self, name, namespace, message):
         # indexing cause issues with Dash
         if self.should_build_index[(namespace, name)]:
             if message.read:
@@ -127,7 +127,7 @@ class ZipQueueMonitor(QueueMonitor):
         return message
 
     @cached
-    def unread_messages(self, namespace, name):
+    def unread_messages(self, name, namespace):
         if len(self.index[(namespace, name, 'unread')]) > 0:
             return self.index[(namespace, name, 'unread')]
 
@@ -141,7 +141,7 @@ class ZipQueueMonitor(QueueMonitor):
         return unread
 
     @cached
-    def unactioned_messages(self, namespace, name):
+    def unactioned_messages(self, name, namespace):
         if len(self.index[(namespace, name, 'unactioned')]) > 0:
             return self.index[(namespace, name, 'unactioned')]
 
@@ -155,7 +155,7 @@ class ZipQueueMonitor(QueueMonitor):
         return unread
 
     @cached
-    def read_messages(self, namespace, name):
+    def read_messages(self, name, namespace):
         if len(self.index[(namespace, name, 'read')]) > 0:
             return self.index[(namespace, name, 'read')]
 
@@ -169,7 +169,7 @@ class ZipQueueMonitor(QueueMonitor):
         return unread
 
     @cached
-    def actioned_messages(self, namespace, name):
+    def actioned_messages(self, name, namespace):
         if len(self.index[(namespace, name, 'actioned')]) > 0:
             return self.index[(namespace, name, 'actioned')]
 
@@ -183,19 +183,19 @@ class ZipQueueMonitor(QueueMonitor):
         return unread
 
     @cached
-    def unread_count(self, namespace, name):
+    def unread_count(self, name, namespace):
         return len(self.unread_messages(namespace, name))
 
     @cached
-    def unactioned_count(self, namespace, name):
+    def unactioned_count(self, name, namespace):
         return len(self.unactioned_messages(namespace, name))
 
     @cached
-    def actioned_count(self, namespace, name):
+    def actioned_count(self, name, namespace):
         return len(self.actioned_messages(namespace, name))
 
     @cached
-    def read_count(self, namespace, name):
+    def read_count(self, name, namespace):
         return len(self.read_messages(namespace, name))
 
     @cached
@@ -240,7 +240,7 @@ class ZipQueueMonitor(QueueMonitor):
                 return log.read().decode('utf-8')
 
     @cached
-    def reply(self, namespace, name, uid):
+    def reply(self, name, namespace, uid):
         """Return the reply of a message"""
         with self.lock:
             for m in self.messages(namespace,  name):

@@ -19,25 +19,36 @@ class MongoStartError(Exception):
     pass
 
 
-def new_queue(client, namespace, name):
-    queues = client[namespace]
-    queue = queues[name]
-    queue.create_index([
-        ('time', pymongo.DESCENDING),
-        ('mtype', pymongo.DESCENDING),
-        ('read', pymongo.DESCENDING),
-        ('actioned', pymongo.DESCENDING),
-        ('replied_id', pymongo.DESCENDING)
-    ])
+def new_queue(db, namespace, name):
+    queue = db[name]
 
-    client.qsystem.namespaces.insert_one({
+    # Pop index
+    index = [
+        ('namespace', pymongo.DESCENDING),
+        ('read', pymongo.DESCENDING),
+        ('mtype', pymongo.DESCENDING),
+    ]
+
+    queue.create_index(index)
+
+    # Other
+    index = [
+        ('time', pymongo.ASCENDING),
+        ('replied_id', pymongo.DESCENDING),
+        ('actioned', pymongo.DESCENDING),
+    ]
+
+    for i in index:
+        queue.create_index([i])
+
+    db.namespaces.insert_one({
         'namespace': namespace,
         'name': name
     })
 
 
 class MongoDB(QueueServer):
-    def __init__(self, uri, location, clean_on_exit=True):
+    def __init__(self, uri, database, location, clean_on_exit=True):
         options = parse_uri(uri)
         address = options['address']
         port = options['port']
@@ -72,6 +83,7 @@ class MongoDB(QueueServer):
             '--pidfilepath', self.pid_file
         ]
 
+        self.database = database
         self.manager: Manager = Manager()
         self.properties = self.manager.dict()
         self.properties['running'] = False
@@ -88,6 +100,7 @@ class MongoDB(QueueServer):
         )
         self.cmd = kwargs['args']
 
+        debug(self.cmd)
         with subprocess.Popen(**kwargs, shell=True) as proc:
             try:
                 properties['running'] = True
@@ -138,31 +151,36 @@ class MongoDB(QueueServer):
     def _setup(self, client='track_client'):
         pass
 
-    def new_queue(self, namespace, name):
+    def new_queue(self, db, namespace, name):
         client = pymongo.MongoClient(
             host=self.address,
             port=self.port)
 
-        new_queue(client, namespace, name)
+        new_queue(client[db], namespace, name)
 
     def stop(self):
         self.properties['running'] = False
         self._process.terminate()
 
+        # kill PID
         try:
-            os.kill(self.properties['db_pid'], signal.SIGTERM)
-
-            if os.path.exists(self.pid_file):
+            pid = self.properties.get('db_pid', None)
+            if pid is None:
                 pid = int(open(self.pid_file, 'r').read())
-                os.kill(pid, signal.SIGINT)
 
-                time.sleep(5)
-                os.remove(self.pid_file)
+            os.kill(pid, signal.SIGINT)
+            time.sleep(10)
+
+            try:
                 os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                info('died gracefully')
 
         except ProcessLookupError:
             pass
 
+        # ---
+        os.remove(self.pid_file)
         if self.clean_on_exit:
             try:
                 shutil.rmtree(self.location)
@@ -184,7 +202,6 @@ class MongoDB(QueueServer):
     def parse(self, properties, line):
         debug(line[40:-1])
         line = line.strip()
-
         # save the init logs for debugging
         if '[initandlisten]' in line:
             self.loglines.append(line)
@@ -200,8 +217,8 @@ class MongoDB(QueueServer):
             raise RuntimeError(f'Closing because: `{line}`')
 
 
-def new_server(uri, location, join=None, clean_on_exit=True):
-    mongo = MongoDB(uri, location, clean_on_exit)
+def new_server(uri, database, location, join=None, clean_on_exit=True):
+    mongo = MongoDB(uri, database, location, clean_on_exit)
     return mongo
 
 

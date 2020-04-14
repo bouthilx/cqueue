@@ -9,7 +9,7 @@ travis-install:
 travis-doc: build-doc
 
 travis-unit:
-	COVERAGE_FILE=.coverage.unit coverage run --parallel-mode -m pytest --cov=msgqueue tests
+	COVERAGE_FILE=.coverage.unit coverage run --parallel-mode -m pytest -s --cov=msgqueue tests
 
 travis-examples:
 	COVERAGE_FILE=.coverage.simple coverage run examples/simple.py

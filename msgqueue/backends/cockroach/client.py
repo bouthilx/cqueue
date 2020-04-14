@@ -9,16 +9,17 @@ from .util import _parse
 
 
 class CKPacemaker(QueuePacemaker):
-    def __init__(self, agent, namespace, wait_time, capture):
+    def __init__(self, agent, wait_time, capture):
         self.client = agent.cursor
         self.lock = agent.lock
-        super(CKPacemaker, self).__init__(agent, namespace, wait_time, capture)
+        self.database = agent.database
+        super(CKPacemaker, self).__init__(agent, wait_time, capture)
 
     def register_agent(self, agent_name):
         with self.lock:
             self.client.execute(f"""
             INSERT INTO
-                {self.namespace}.system (agent)
+                {self.database}.system (agent)
             VALUES
                 (%s)
             RETURNING uid
@@ -31,54 +32,42 @@ class CKPacemaker(QueuePacemaker):
         with self.lock:
             self.client.execute(f"""
             UPDATE 
-                {self.namespace}.system
+                {self.database}.{self.name}
             SET 
                 heartbeat = current_timestamp()
             WHERE
                 uid = %s
-            """, (self.agent_id,))
+            """, (self.message.uid,))
 
     def register_message(self, name, message):
         if message is None:
             return None
 
-        with self.lock:
-            self.client.execute(f"""
-            UPDATE {self.namespace}.system SET
-                message = %s,
-                queue = %s
-            WHERE 
-                uid = %s
-            """, (message.uid, name, self.agent_id))
+        self.name = name
+        self.message = message
+        self.update_heartbeat()
 
-            return message
+        return message
 
     def unregister_message(self, uid):
-        with self.lock:
-            self.client.execute(f"""
-            UPDATE {self.namespace}.system SET
-                message = NULL
-            WHERE 
-                uid = %s AND
-                message = %s
-            """, (self.agent_id, uid))
+        pass
 
     def unregister_agent(self):
         with self.lock:
             self.client.execute(f"""
-            UPDATE {self.namespace}.system SET
+            UPDATE {self.database}.system SET
                 alive = false
             WHERE 
                 uid = %s
             """, (self.agent_id,))
 
     def insert_log_line(self, line, ltype=0):
-        if self.agent_id is None:
+        if self.agent_id is None or self.client is None:
             return
 
         with self.lock:
             self.client.execute(f"""
-            INSERT INTO {self.namespace}.logs (agent, ltype, line)
+            INSERT INTO {self.database}.logs (agent, ltype, line)
             VALUES
                 (%s, %s, %s)
             """, (self.agent_id, ltype, json.dumps(line)))
@@ -93,7 +82,7 @@ class CKMQClient(MessageQueue):
         cockroach://192.168.0.10:8123
     """
 
-    def __init__(self, uri, namespace, name='worker', log_capture=True, timeout=60):
+    def __init__(self, uri, database, name='worker', log_capture=True, timeout=60):
         uri = parse_uri(uri)
         self.username = 'root'  # uri.get('username', 'default_user')
         self.password = uri.get('password', 'mq_password')
@@ -111,9 +100,9 @@ class CKMQClient(MessageQueue):
         self.cursor = self.con.cursor()
         self.name = name
         self.agent_id = None
-        self.namespace = namespace
         self.heartbeat_monitor = None
         self.lock = RLock()
+        self.database = database
 
         self.capture = log_capture
         self.timeout = timeout
@@ -122,27 +111,29 @@ class CKMQClient(MessageQueue):
         self.con.close()
         return self.heartbeat_monitor.join()
 
-    def pacemaker(self, namespace, wait_time, capture):
-        return CKPacemaker(self, namespace, wait_time, capture)
+    def pacemaker(self, wait_time, capture):
+        return CKPacemaker(self, wait_time, capture)
 
-    def enqueue(self, name, message, mtype=0, replying_to=None):
+    def enqueue(self, queue, namespace, message, mtype=0, replying_to=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         with self.lock:
             # need to be root to create database :/
-            if not self._queue_exist(name):
-                new_queue(self.cursor, 'root', self.namespace, name)
+            if not self._queue_exist(queue):
+                new_queue(self.cursor, self.database, queue, namespace, 'root')
+
+            print('enqueue')
 
             self.cursor.execute(f"""
             INSERT INTO  
-                {self.namespace}.{name} (mtype, read, actioned, message, replying_to)
+                {self.database}.{queue} (mtype, read, actioned, message, replying_to, namespace, retry)
             VALUES
-                (%s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, 0)
             RETURNING uid
-            """, (mtype, False, False, json.dumps(message), replying_to))
+            """, (mtype, False, False, json.dumps(message), replying_to, namespace))
 
             return self.cursor.fetchone()[0]
 
-    def dequeue(self, name, mtype=None):
+    def dequeue(self, queue, namespace, mtype=None):
         """See `~mlbaselines.distributed.queue.MessageQueue`"""
         query = ['read = false']
         args = list()
@@ -155,21 +146,26 @@ class CKMQClient(MessageQueue):
             query.append('mtype = %s')
             args.append(mtype)
 
+        if namespace is not None:
+            query.append('namespace = %s')
+            args.append(namespace)
+
         query = ' AND\n'.join(query)
         with self.lock:
             try:
-                self.cursor.execute(f"""
-                UPDATE {self.namespace}.{name} SET 
+                select = f"""
+                UPDATE {self.database}.{queue} SET
                     (read, read_time) = (true, current_timestamp())
-                WHERE 
+                WHERE
                     {query}
                 ORDER BY
-                    time
+                    time ASC
                 LIMIT 1
                 RETURNING *
-                """, tuple(args))
+                """
+                self.cursor.execute(select, tuple(args))
+                return self._register_message(queue, _parse(self.cursor.fetchone()))
 
-                return self._register_message(name, _parse(self.cursor.fetchone()))
             except psycopg2.errors.UndefinedTable:
                 return None
 
@@ -180,7 +176,7 @@ class CKMQClient(MessageQueue):
 
         with self.lock:
             self.cursor.execute(f"""
-            UPDATE {self.namespace}.{name} SET 
+            UPDATE {self.database}.{name} SET 
                 (actioned, actioned_time) = (true, current_timestamp())
             WHERE 
                 uid = %s
@@ -195,24 +191,18 @@ class CKMQClient(MessageQueue):
 
         with self.lock:
             self.cursor.execute(f"""
-            UPDATE {self.namespace}.{name} SET 
+            UPDATE {self.database}.{name} SET 
                 error = %s
             WHERE 
                 uid = %s
-            """, (uid, json.dumps(error)))
+            """, (json.dumps(error), uid))
 
             self._unregister_message(uid)
             return uid
 
-    def reply(self, name, uid):
-        if isinstance(uid, Message):
-            uid = uid.uid
-
-        return self.monitor().reply(self.namespace, name, uid)
-
     def monitor(self):
         from .monitor import CKQueueMonitor
-        return CKQueueMonitor(cursor=self.cursor, lock=self.lock)
+        return CKQueueMonitor(self.database, cursor=self.cursor, lock=self.lock)
 
 
 def new_client(*args, **kwargs):
