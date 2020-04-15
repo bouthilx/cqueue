@@ -180,7 +180,11 @@ class MongoDB(QueueServer):
             pass
 
         # ---
-        os.remove(self.pid_file)
+        try:
+            os.remove(self.pid_file)
+        except FileNotFoundError:
+            pass
+        
         if self.clean_on_exit:
             try:
                 shutil.rmtree(self.location)

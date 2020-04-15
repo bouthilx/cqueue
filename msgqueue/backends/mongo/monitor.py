@@ -59,7 +59,11 @@ class MongoQueueMonitor(QueueMonitor):
 
     def clear(self, name, namespace):
         with self.lock:
-            self.db[name].remote({'namespace': namespace})
+            if namespace is not None:
+                self.db[name].delete_many({'namespace': namespace})
+                self.db.qsystem.delete_many({'namespace': namespace})
+            else:
+                self.db[name].drop()
 
     def unread_messages(self, name, namespace):
         with self.lock:

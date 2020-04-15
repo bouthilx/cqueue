@@ -88,9 +88,13 @@ class CKQueueMonitor(QueueMonitor):
 
     def clear(self, name, namespace):
         with self.lock:
-            query = f"""DELETE FROM {namespace}.{name}"""
+            if namespace is not None:
+                query = f"""DELETE FROM {self.database}.{name} WHERE namespace = namespace"""
+                self.cursor.execute(f"DELETE FROM {self.database}.qsystem WHERE namespace = %s", (namespace,))
+            else:
+                query = f"""DELETE FROM {self.database}.{name}"""
+
             self.cursor.execute(query)
-            self.cursor.execute("DELETE FROM qsystem.namespaces WHERE namespace = %s", (namespace,))
 
     def messages(self, name, namespace, limit=None):
         with self.lock:
