@@ -175,7 +175,7 @@ class MongoClient(MessageQueue):
 
     def monitor(self):
         from .monitor import MongoQueueMonitor
-        return MongoQueueMonitor(self.database, cursor=self.client)
+        return MongoQueueMonitor(uri=None, database=self.database, cursor=self.client)
 
 
 def new_client(*args, **kwargs):

@@ -17,7 +17,7 @@ def mongo_to_dict(a):
 
 
 class MongoQueueMonitor(QueueMonitor):
-    def __init__(self, database, uri=None, cursor=None):
+    def __init__(self, uri, database, cursor=None):
         # When using this inside a dashbord it is executed in a multi threaded environment
         # You need to lock the cursor to not get some errors
         self.lock = RLock()
@@ -46,7 +46,7 @@ class MongoQueueMonitor(QueueMonitor):
             })
             return _parse(msg)
 
-    def messages(self, name, namespace, limit=100):
+    def messages(self, name, namespace, limit=100, mtype=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -54,8 +54,10 @@ class MongoQueueMonitor(QueueMonitor):
                     data.extend(self.messages(namespace, n, limit))
                 return data
 
-            return [
-                _parse(msg) for msg in self.db[name].find({'namespace': namespace})]
+            query = dict()
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return [_parse(msg) for msg in self.db[name].find(query)]
 
     def clear(self, name, namespace):
         with self.lock:
@@ -65,79 +67,27 @@ class MongoQueueMonitor(QueueMonitor):
             else:
                 self.db[name].drop()
 
-    def unread_messages(self, name, namespace):
+    def unread_messages(self, name, namespace, mtype=None):
         with self.lock:
-            return [
-                _parse(msg) for msg in self.db[name].find({
-                    'read': False,
-                    'namespace': namespace
-                })]
+            query = {
+                'read': False
+            }
 
-    def unactioned_messages(self, name, namespace):
-        with self.lock:
-            return [
-                _parse(msg) for msg in self.db[name].find({
-                    'actioned': False,
-                    'read': True,
-                    'namespace': namespace
-                })]
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
 
-    def unread_count(self, name, namespace):
-        with self.lock:
-            return self.db[name].count({
-                'read': False,
-                'namespace': namespace
-            })
+            return [_parse(msg) for msg in self.db[name].find(query)]
 
-    def unactioned_count(self, name, namespace):
+    def unactioned_messages(self, name, namespace, mtype=None):
         with self.lock:
-            return self.db[name].count({
-                'actioned': False,
+            query = {
                 'read': True,
-                'namespace': namespace
-            })
-
-    def read_count(self, name, namespace):
-        with self.lock:
-            return self.db[name].count({
-                'read': True,
-                'namespace': namespace
-            })
-
-    def actioned_count(self, name, namespace):
-        with self.lock:
-            return self.db[name].count({
-                'actioned': True,
-                'namespace': namespace
-            })
-
-    def agent_count(self, namespace):
-        with self.lock:
-            return self.db.system.count({
-                'namespace': namespace
-            })
-
-    def reset_queue(self, name, namespace):
-        with self.lock:
-            msgs = self.db[name].find({
                 'actioned': False,
-                'read':  True,
-                'namespace': namespace
-            })
+            }
 
-            rc = self.db[name].update_many(
-                {'actioned': False},
-                {'namespace': namespace},
-                {'$set': {
-                    'read': False, 'read_time': None}
-                }
-            )
-
-            items = []
-            for msg in msgs:
-                items.append(_parse(msg))
-
-            return items
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return [_parse(msg) for msg in self.db[name].find(query)]
 
     def unactioned(self, name, namespace):
         with self.lock:
@@ -145,6 +95,77 @@ class MongoQueueMonitor(QueueMonitor):
                 'actioned': False,
                 'namespace': namespace
             })]
+
+    @staticmethod
+    def add_filter(query: dict, name, value):
+        if value is not None:
+            if isinstance(value, (tuple, list)):
+                query[name] = {'$in': tuple(value)}
+            else:
+                query[name] = value
+        return query
+
+    def unread_count(self, name, namespace, mtype=None):
+        with self.lock:
+            query = {
+                'read': False
+            }
+
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return self.db[name].count(query)
+
+    def unactioned_count(self, name, namespace, mtype=None):
+        with self.lock:
+            query = {
+                'read': True,
+                'actioned': False,
+            }
+
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return self.db[name].count(query)
+
+    def read_count(self, name, namespace, mtype=None):
+        with self.lock:
+            query = {
+                'read': True
+            }
+
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return self.db[name].count(query)
+
+    def actioned_count(self, name, namespace, mtype=None):
+        with self.lock:
+            query = {
+                'read': True,
+                'actioned': True,
+            }
+
+            self.add_filter(query, 'namespace', namespace)
+            self.add_filter(query, 'mtype', mtype)
+            return self.db[name].count(query)
+
+    def agent_count(self):
+        with self.lock:
+            return self.db.system.count()
+
+    def reset_queue(self, name, namespace):
+        with self.lock:
+            query = {
+                'actioned': False,
+                'read':  True,
+            }
+            self.add_filter(query, 'namespace', namespace)
+
+            rc = self.db[name].update_many(
+                query,
+                {'$set': {
+                    'read': False,
+                    'read_time': None
+                }}
+            )
 
     def dump(self, name, namespace):
         rows = self.db[name].find({'namespace': namespace})
@@ -178,9 +199,7 @@ class MongoQueueMonitor(QueueMonitor):
             }
         }
 
-        if namespace is not None:
-            query['namespace'] = namespace
-
+        self.add_filter(query, 'namespace', namespace)
         return query
 
     def lost_messages(self, queue, namespace, timeout_s=60):
@@ -211,9 +230,7 @@ class MongoQueueMonitor(QueueMonitor):
             'read': True,
         }
 
-        if namespace is not None:
-            query['namespace'] = namespace
-
+        self.add_filter(query, 'namespace', namespace)
         return query
 
     def failed_messages(self, queue, namespace):

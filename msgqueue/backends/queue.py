@@ -277,32 +277,32 @@ class QueueMonitor:
         """Clear the queue by removing all messages"""
         raise NotImplementedError()
 
-    def messages(self, name, namespace, limit=100):
+    def messages(self, name, namespace, mtype=None, limit=100):
         raise NotImplementedError()
 
-    def unread_messages(self, name, namespace):
+    def unread_messages(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
-    def unactioned_messages(self, name, namespace):
+    def unactioned_messages(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
-    def unread_count(self, name, namespace):
+    def unread_count(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
-    def unactioned_count(self, name, namespace):
+    def unactioned_count(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
-    def actioned_count(self, name, namespace):
+    def actioned_count(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
-    def read_count(self, name, namespace):
+    def read_count(self, name, namespace, mtype=None):
         raise NotImplementedError()
 
     def reset_queue(self, name, namespace):
         """Hard reset the queue, putting all unactioned messages into an unread state"""
         raise NotImplementedError()
 
-    def lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
+    def lost_messages(self, queue, namespace, timeout_s=60):
         """Return the list of messages that were assigned to worker that died"""
         raise NotImplementedError()
 

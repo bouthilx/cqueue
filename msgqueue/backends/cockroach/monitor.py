@@ -40,13 +40,6 @@ class CKQueueMonitor(QueueMonitor):
 
         return records
 
-    def dump(self, name, namespace):
-        self.cursor.execute(f'SELECT *  FROM {namespace}.{name}')
-
-        rows = self.cursor.fetchall()
-        for row in rows:
-            print(_parse(row))
-
     def queues(self):
         with self.lock:
             self.cursor.execute(f"""
@@ -96,7 +89,43 @@ class CKQueueMonitor(QueueMonitor):
 
             self.cursor.execute(query)
 
-    def messages(self, name, namespace, limit=None):
+    def _constraint(self, name, value):
+        constraint = None
+        args = None
+
+        if value is not None:
+            if isinstance(value, (list, tuple)):
+                constraint = f'{name} in %s'
+                args = (tuple(value))
+            else:
+                constraint = f'{name} = %s'
+                args = (value)
+
+        return constraint, args
+
+    def new_filters(self, namespace, mtype):
+        constraint = []
+        args = []
+
+        a, b = self._constraint('namespace', namespace)
+        if a is not None:
+            constraint.append(a)
+            args.append(b)
+
+        a, b = self._constraint('mtype', mtype)
+        if a is not None:
+            constraint.append(a)
+            args.append(b)
+
+        if len(constraint) == 0:
+            # there is a where so we need a condition here
+            return '1 = 1', tuple()
+
+        a = ' AND '.join(constraint)
+        b = tuple(args)
+        return a, b
+
+    def messages(self, name, namespace, limit=None, mtype=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -104,114 +133,126 @@ class CKQueueMonitor(QueueMonitor):
                     data.extend(self.messages(namespace, n, limit))
                 return data
 
+            constraints, args = self.new_filters(namespace, mtype)
             query = f"""
             SELECT 
-                * 
+                *
             FROM 
                 {self.database}.{name}
+            WHERE
+                {constraints}
             """
+
             if limit is not None:
                 query = f'{query} LIMIT {limit}'
 
-            self.cursor.execute(query)
+            self.cursor.execute(query, args)
             return self._fetch_all()
 
-    def unread_messages(self, name, namespace):
+    def unread_messages(self, name, namespace, mtype=None):
         with self.lock:
+            constraints, args = self.new_filters(namespace, mtype)
             self.cursor.execute(f"""
             SELECT 
                 * 
             FROM 
                 {self.database}.{name}
             WHERE 
-                read = false AND
-                namespace = %s
-            """, (namespace,))
+                {constraints}
+                AND read = false 
+            """, args)
 
             return self._fetch_all()
 
-    def unactioned_messages(self, name, namespace):
+    def unactioned_messages(self, name, namespace, mtype=None):
         with self.lock:
+            constraints, args = self.new_filters(namespace, mtype)
             self.cursor.execute(f"""
             SELECT 
                 * 
             FROM 
                 {self.database}.{name}
             WHERE 
-                read = true        AND
-                actioned = false AND
-                namespace = %s
-            """, (namespace,))
+                {constraints}
+                AND read = true        
+                AND actioned = false
+            """, args)
 
             return self._fetch_all()
 
-    def unread_count(self, name, namespace):
+    def unread_count(self, name, namespace, mtype=None):
         with self.lock:
+            constraints, args = self.new_filters(namespace, mtype)
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
                 {self.database}.{name}
             WHERE 
-                read = false AND
-                namespace = %s
-            """, (namespace,))
+                {constraints}
+                AND read = false
+            """, args)
 
             return self.cursor.fetchone()[0]
 
-    def unactioned_count(self, name, namespace):
+    def unactioned_count(self, name, namespace, mtype=None):
         with self.lock:
+            constraints, args = self.new_filters(namespace, mtype)
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
                 {self.database}.{name}
             WHERE 
-                read = true AND
-                actioned = false AND
-                namespace = %s
-            """, (namespace,))
+                {constraints}
+                AND read = true
+                AND actioned = false
+            """, args)
 
             return self.cursor.fetchone()[0]
 
-    def read_count(self, name, namespace):
+    def read_count(self, name, namespace, mtype=None):
         with self.lock:
-            self.cursor.execute(f"""
+            constraints, args = self.new_filters(namespace, mtype)
+            query = f"""
             SELECT 
                 COUNT(*)
             FROM 
                 {self.database}.{name}
             WHERE 
-                read = true AND
-                namespace = %s
-            """, (namespace,))
-
+                {constraints}
+                AND read = true
+            """
+            self.cursor.execute(query, args)
             return self.cursor.fetchone()[0]
 
-    def actioned_count(self, name, namespace):
+    def actioned_count(self, name, namespace, mtype=None):
         with self.lock:
+            constraints, args = self.new_filters(namespace, mtype)
             self.cursor.execute(f"""
             SELECT 
                 COUNT(*)
             FROM 
                 {self.database}.{name}
             WHERE 
-                actioned = true AND
-                namespace = %s
-            """, (namespace,))
+                {constraints}
+                AND actioned = true
+            """, args)
 
             return self.cursor.fetchone()[0]
 
     def reset_queue(self, name, namespace):
         with self.lock:
+            constraints, args = self.new_filters(namespace, None)
             self.cursor.execute(f"""
             UPDATE {self.database}.{name}
                 SET 
                     (read, read_time) = (false, null)
                 WHERE 
-                    actioned = false
+                    {constraints}
+                    AND actioned = false
             RETURNING *
-            """)
+            """, args)
 
             rows = self.cursor.fetchall()
             records = []
@@ -321,7 +362,6 @@ class CKQueueMonitor(QueueMonitor):
             if namespace is not None:
                 constraint = 'AND namespace = %s'
                 args = (namespace,)
-
 
             query = f"""
             UPDATE {self.database}.{queue}
