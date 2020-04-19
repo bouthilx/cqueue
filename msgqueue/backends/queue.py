@@ -16,14 +16,13 @@ def to_dict(a):
 
 @dataclass
 class Agent:
-    uid: int             # Unique ID of the agent
-    time: datetime       # Time the agent was created
-    agent: str           # Name of the Agent (Names are not unique)
-    heartbeat: datetime  # Last time we had a proof of life
-    alive: bool          # Is the Agent Alive
-    # Necessary to detect messages that are stuck
-    message: int         # Message the Agent is processing
-    queue: str           # Message queue the message belong to
+    uid: int               # Unique ID of the agent
+    time: datetime         # Time the agent was created
+    agent: str             # Name of the Agent (Names are not unique)
+    heartbeat: datetime    # Last time we had a proof of life
+    alive: bool            # Is the Agent Alive
+    message: int           # Message the Agent is processing
+    namespace: str = None  # Message queue the message belong to
 
     def to_dict(self):
         return asdict(self)
@@ -270,7 +269,7 @@ class QueueMonitor:
     def queues(self, namespace):
         raise NotImplementedError()
 
-    def agents(self):
+    def agents(self, namespace):
         raise NotImplementedError()
 
     def clear(self, name, namespace):
@@ -359,7 +358,7 @@ class QueueMonitor:
                         dumper(messages, queue_archive)
 
                 with archive.open(f'{namespace_out}/system.{format}', 'w') as system_archive:
-                    agents = self.agents()
+                    agents = self.agents(None)
                     dumper(agents, system_archive)
 
                 for agent in agents:

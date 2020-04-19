@@ -277,14 +277,22 @@ class CKQueueMonitor(QueueMonitor):
 
             return _parse(self.cursor.fetchone())
 
-    def agents(self):
+    def agents(self, namespace):
         with self.lock:
+            constraint = '1 = 1'
+            args = tuple()
+            if namespace is not None:
+                constraint = 'namespace = %s'
+                args = (namespace,)
+
             self.cursor.execute(f"""
             SELECT 
                 *
             FROM
                 {self.database}.system
-            """)
+            WHERE
+                {constraint}
+            """, args)
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
 

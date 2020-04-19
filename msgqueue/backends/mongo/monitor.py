@@ -172,9 +172,12 @@ class MongoQueueMonitor(QueueMonitor):
         for row in rows:
             print(_parse(row))
 
-    def agents(self):
+    def agents(self, namespace):
         with self.lock:
-            agents = self.db.system.find()
+            query = {}
+            self.add_filter(query, 'namespace', namespace)
+
+            agents = self.db.system.find(query)
             return [_parse_agent(agent) for agent in agents]
 
     def dead_agents(self, namespace, timeout_s=60):

@@ -43,14 +43,31 @@ class CKPacemaker(QueuePacemaker):
         if message is None:
             return None
 
+        with self.lock:
+            self.client.execute(f"""
+            UPDATE 
+                {self.database}.system
+            SET 
+                (message, namespace, heartbeat) = (%s, %s, current_timestamp())
+            WHERE
+                uid = %s
+            """, (message.uid, message.namespace, self.agent_id))
+
         self.name = name
         self.message = message
         self.update_heartbeat()
 
         return message
 
-    def unregister_message(self, uid):
-        pass
+    def unregister_message(self, uid=None):
+        self.client.execute(f"""
+            UPDATE 
+                {self.database}.system
+            SET 
+                (message, heartbeat)   = (NULL, current_timestamp())
+            WHERE
+                uid = %s
+            """, (self.agent_id,))
 
     def unregister_agent(self):
         with self.lock:

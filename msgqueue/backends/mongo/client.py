@@ -20,7 +20,7 @@ class MongoQueuePacemaker(QueuePacemaker):
             'heartbeat': datetime.datetime.utcnow(),
             'alive': True,
             'message': None,
-            'queue': None
+            'namespace': None
         }).inserted_id
         return self.agent_id
 
@@ -34,9 +34,20 @@ class MongoQueuePacemaker(QueuePacemaker):
                 }
             })
 
-    def register_message(self, name, message):
+    def register_message(self, name, message: Message):
         if message is None:
             return None
+
+        self.client.system.update_one(
+            {'_id': self.agent_id},
+            {
+                '$set': {
+                    'message': message.uid,
+                    'namespace': message.namespace,
+                    'heartbeat': datetime.datetime.utcnow()
+                }
+            }
+        )
 
         self.name = name
         self.message = message
@@ -45,7 +56,15 @@ class MongoQueuePacemaker(QueuePacemaker):
         return message
 
     def unregister_message(self, uid=None):
-        pass
+        self.client.system.update_one(
+            {'_id': self.agent_id},
+            {
+                '$set': {
+                    'message': None,
+                    'heartbeat': datetime.datetime.utcnow()
+                }
+            }
+        )
 
     def unregister_agent(self):
         self.client.system.update_one({'_id': self.agent_id}, {

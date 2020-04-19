@@ -99,7 +99,7 @@ def system_schema(clients, db_name):
         heartbeat       TIMESTAMP   DEFAULT current_timestamp(),
         alive           BOOLEAN     DEFAULT true,
         message         INTEGER,
-        queue           character(64)
+        namespace       character(64)
     );
     CREATE TABLE IF NOT EXISTS {db_name}.qsystem (
         namespace       character(64),
@@ -117,7 +117,7 @@ def system_schema(clients, db_name):
     ON {db_name}.system (
         uid         ASC,
         message     ASC,
-        queue       ASC
+        namespace   ASC
     );
 
     CREATE INDEX IF NOT EXISTS logs_index

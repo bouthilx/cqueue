@@ -105,7 +105,7 @@ def test_pop_client(backend):
 
         time.sleep(1)
         # for coverage sake check the queries work
-        agents = env.monitor.agents()
+        agents = env.monitor.agents(None)
         print('Agents:', agents)
 
         # print('Dead Agents:', env.monitor.dead_agents(env.namespace))
