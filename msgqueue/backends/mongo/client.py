@@ -196,6 +196,10 @@ class MongoClient(MessageQueue):
         from .monitor import MongoQueueMonitor
         return MongoQueueMonitor(uri=None, database=self.database, cursor=self.client)
 
+    def aggregate_monitor(self):
+        from .aggregate_monitor import AggregateMonitor
+        return AggregateMonitor(uri=None, database=self.database, cursor=self.client)
+
 
 def new_client(*args, **kwargs):
     return MongoClient(*args, **kwargs)

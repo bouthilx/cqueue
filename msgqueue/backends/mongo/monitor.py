@@ -184,7 +184,7 @@ class MongoQueueMonitor(QueueMonitor):
         agents = self.db.system.find({
             'namespace': namespace,
             'heartbeat': {
-                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
+                '$lt': datetime.datetime.utcnow() - datetime.timedelta(timeout_s)
             },
             'alive': {
                 '$eq': True
@@ -198,7 +198,7 @@ class MongoQueueMonitor(QueueMonitor):
             'read': True,
             'actioned': False,
             'heartbeat': {
-                '$gt': datetime.datetime.utcnow() + datetime.timedelta(timeout_s)
+                '$lt': datetime.datetime.utcnow() - datetime.timedelta(timeout_s)
             }
         }
 
@@ -291,6 +291,10 @@ class MongoQueueMonitor(QueueMonitor):
             self.lock,
             mongo_to_dict
         )
+
+    def aggregate_monitor(self):
+        from .aggregate_monitor import AggregateMonitor
+        return AggregateMonitor(uri=None, database=self.database, cursor=self.client)
 
 
 def new_monitor(*args, **kwargs):
