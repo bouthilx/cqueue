@@ -133,6 +133,9 @@ class BaseWorker:
 
                 handler = self.dispatcher.get(workitem.mtype, self.unregistered_workitem)
 
+                namespace = self.client.heartbeat_monitor.message.namespace
+                self.context['namespace'] = namespace
+
                 # Error handling for User code
                 try:
                     result = handler(workitem, self.context)
