@@ -135,6 +135,7 @@ class BaseWorker:
 
                 namespace = self.client.heartbeat_monitor.message.namespace
                 self.context['namespace'] = namespace
+                self.context['client'] = self.client
 
                 # Error handling for User code
                 try:
