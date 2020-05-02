@@ -23,8 +23,12 @@ class MongoQueueMonitor(QueueMonitor):
         self.lock = RLock()
 
         if cursor is None:
+            mongodb_uri = uri.replace('mongo', 'mongodb')
             uri = parse_uri(uri)
-            self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
+            if uri.get('username') is not None:
+                self.client = pymongo.MongoClient(mongodb_uri)
+            else:
+                self.client = pymongo.MongoClient(host=uri['address'], port=int(uri['port']))
         else:
             self.client = cursor
 
