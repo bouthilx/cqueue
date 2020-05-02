@@ -145,7 +145,10 @@ class BaseWorker:
                         self.push_result(result, replying_to=workitem)
 
                     self.client.mark_actioned(self.work_queue, workitem)
-
+                except KeyboardInterrupt:
+                    info('Task interrupted')
+                    self.client.push(self.result_queue, self.namespace, {}, mtype=WORKER_LEFT)
+                    raise
                 except Exception:
                     error_str = traceback.format_exc()
                     error(error_str)
