@@ -120,7 +120,7 @@ class CKQueueMonitor(QueueMonitor):
 
         return constraint, args
 
-    def new_filters(self, namespace, mtype):
+    def new_filters(self, namespace, mtype, time=None):
         constraint = []
         args = []
 
@@ -134,6 +134,10 @@ class CKQueueMonitor(QueueMonitor):
             constraint.append(a)
             args.append(b)
 
+        if time is not None:
+            constraint.append(f'time > %s')
+            args.append(time)
+
         if len(constraint) == 0:
             # there is a where so we need a condition here
             return '1 = 1', tuple()
@@ -142,7 +146,7 @@ class CKQueueMonitor(QueueMonitor):
         b = tuple(args)
         return a, b
 
-    def messages(self, name, namespace, limit=None, mtype=None):
+    def messages(self, name, namespace, limit=None, mtype=None, time=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -150,7 +154,7 @@ class CKQueueMonitor(QueueMonitor):
                     data.extend(self.messages(namespace, n, limit))
                 return data
 
-            constraints, args = self.new_filters(namespace, mtype)
+            constraints, args = self.new_filters(namespace, mtype, time)
             query = f"""
             SELECT 
                 *

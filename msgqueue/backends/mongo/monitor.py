@@ -34,6 +34,7 @@ class MongoQueueMonitor(QueueMonitor):
 
         self.database = database
         self.db = self.client[self.database]
+        self.last_times = []
 
     def namespaces(self, queue=None):
         with self.lock:
@@ -53,7 +54,13 @@ class MongoQueueMonitor(QueueMonitor):
             })
             return _parse(msg)
 
-    def messages(self, name, namespace, limit=100, mtype=None):
+    @staticmethod
+    def add_time_filter(query: dict, name, time):
+        if time is not None:
+            query[name] = {'$gt': time}
+        return query
+
+    def messages(self, name, namespace, limit=100, mtype=None, time=None):
         with self.lock:
             if isinstance(name, list):
                 data = []
@@ -64,7 +71,13 @@ class MongoQueueMonitor(QueueMonitor):
             query = dict()
             self.add_filter(query, 'namespace', namespace)
             self.add_filter(query, 'mtype', mtype)
-            return [_parse(msg) for msg in self.db[name].find(query)]
+            self.add_time_filter(query, 'time', time)
+
+            results = [_parse(msg) for msg in self.db[name].find(query, sort=[
+                ('time', pymongo.ASCENDING),
+            ])]
+
+            return results
 
     def clear(self, name, namespace):
         with self.lock:

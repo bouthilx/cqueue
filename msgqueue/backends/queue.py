@@ -23,6 +23,7 @@ class Agent:
     alive: bool            # Is the Agent Alive
     message: int           # Message the Agent is processing
     namespace: str = None  # Message queue the message belong to
+    queue: str = None
 
     def to_dict(self):
         return asdict(self)
@@ -276,7 +277,7 @@ class QueueMonitor:
         """Clear the queue by removing all messages"""
         raise NotImplementedError()
 
-    def messages(self, name, namespace, mtype=None, limit=100):
+    def messages(self, name, namespace, mtype=None, limit=100, time=None):
         raise NotImplementedError()
 
     def unread_messages(self, name, namespace, mtype=None):

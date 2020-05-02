@@ -34,7 +34,25 @@ class AggregateMonitor:
                 query[name] = value
         return query
 
-    def group_by_namespace(self, name, query, field_name):
+    def group_by_substring(self, name, query, field_name, length):
+        return self.db[name].aggregate([
+            {'$project': {
+                'sub_namespace': {'$substr': ['$namespace', 0, length]},
+                'read': 1,
+                'actioned': 1,
+                'heartbeat': 1,
+                'error': 1,
+            }},
+            {'$match': query},
+            {'$group': {
+                '_id': '$sub_namespace',
+                field_name: {
+                    '$sum': 1
+                }
+            }}
+        ])
+
+    def group_by_namespace(self, name, query, field_name, length=None):
         return self.db[name].aggregate([
             {'$match': query},
             {'$group': {
@@ -59,7 +77,7 @@ class AggregateMonitor:
         ])
         return counts
 
-    def lost_count(self, name, mtype=None, timeout_s=60):
+    def lost_count(self, name, mtype=None, timeout_s=60, groupby=group_by_namespace):
         query = {
             'read': True,
             'actioned': False,
@@ -68,26 +86,26 @@ class AggregateMonitor:
             }
         }
         self.add_filter(query, 'mtype', mtype)
-        return self.group_by_namespace(name, query, 'lost')
+        return groupby(self, name, query, 'lost')
 
-    def failed_count(self, name, mtype=None):
+    def failed_count(self, name, mtype=None, groupby=group_by_namespace):
         query = {
             'error': {'$ne': None},
             'actioned': False,
             'read': True,
         }
         self.add_filter(query, 'mtype', mtype)
-        return self.group_by_namespace(name, query, 'failed')
+        return groupby(self, name, query, 'failed')
 
-    def unread_count(self, name, mtype=None):
+    def unread_count(self, name, mtype=None, groupby=group_by_namespace):
         with self.lock:
             query = {
                 'read': False
             }
             self.add_filter(query, 'mtype', mtype)
-            return self.group_by_namespace(name, query, 'unread')
+            return groupby(self, name, query, 'unread')
 
-    def unactioned_count(self, name, mtype=None):
+    def unactioned_count(self, name, mtype=None, groupby=group_by_namespace):
         with self.lock:
             query = {
                 'read': True,
@@ -95,18 +113,18 @@ class AggregateMonitor:
             }
 
             self.add_filter(query, 'mtype', mtype)
-            return self.group_by_namespace(name, query, 'unactioned')
+            return groupby(self, name, query, 'unactioned')
 
-    def read_count(self, name, mtype=None):
+    def read_count(self, name, mtype=None, groupby=group_by_namespace):
         with self.lock:
             query = {
                 'read': True
             }
 
             self.add_filter(query, 'mtype', mtype)
-            return self.group_by_namespace(name, query, 'read')
+            return groupby(self, name, query, 'read')
 
-    def actioned_count(self, name, mtype=None):
+    def actioned_count(self, name, mtype=None, groupby=group_by_namespace):
         with self.lock:
             query = {
                 'read': True,
@@ -114,4 +132,4 @@ class AggregateMonitor:
             }
 
             self.add_filter(query, 'mtype', mtype)
-            return self.group_by_namespace(name, query, 'actioned')
+            return groupby(self, name, query, 'actioned')
