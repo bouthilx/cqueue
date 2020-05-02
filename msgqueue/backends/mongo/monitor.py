@@ -35,8 +35,11 @@ class MongoQueueMonitor(QueueMonitor):
         self.database = database
         self.db = self.client[self.database]
 
-    def namespaces(self):
+    def namespaces(self, queue=None):
         with self.lock:
+            if queue is not None:
+                return list(self.db[queue].distinct('namespace'))
+
             return list(set(n['namespace'] for n in self.db.namespaces.find({})))
 
     def queues(self):

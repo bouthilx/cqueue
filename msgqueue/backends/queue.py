@@ -263,7 +263,7 @@ class QueueMonitor:
         """Archive a namespace into a zipfile and delete the namespace from the database"""
         raise NotImplementedError()
 
-    def namespaces(self):
+    def namespaces(self, queue=None):
         raise NotImplementedError()
 
     def queues(self, namespace):

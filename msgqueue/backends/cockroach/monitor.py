@@ -40,6 +40,23 @@ class CKQueueMonitor(QueueMonitor):
 
         return records
 
+    def namespaces(self, queue=None):
+        with self.lock:
+            if queue is not None:
+                self.cursor.execute(f"""
+                    SELECT
+                        DISTINCT namespace
+                    FROM {self.database}.{queue};
+                    """)
+            else:
+                self.cursor.execute(f"""
+                SELECT
+                    namespace
+                FROM {self.database}.qsystem;
+                """)
+
+            return list(set(n[0] for n in self.cursor.fetchall()))
+
     def queues(self):
         with self.lock:
             self.cursor.execute(f"""
