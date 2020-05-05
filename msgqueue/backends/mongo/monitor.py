@@ -211,7 +211,7 @@ class MongoQueueMonitor(QueueMonitor):
         agents = self.db.system.find({
             'namespace': namespace,
             'heartbeat': {
-                '$lt': datetime.datetime.utcnow() - datetime.timedelta(timeout_s)
+                '$lt': datetime.datetime.utcnow() - datetime.timedelta(seconds=timeout_s)
             },
             'alive': {
                 '$eq': True
@@ -225,7 +225,7 @@ class MongoQueueMonitor(QueueMonitor):
             'read': True,
             'actioned': False,
             'heartbeat': {
-                '$lt': datetime.datetime.utcnow() - datetime.timedelta(timeout_s)
+                '$lt': datetime.datetime.utcnow() - datetime.timedelta(seconds=timeout_s)
             }
         }
 
