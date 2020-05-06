@@ -21,6 +21,7 @@ class MongoQueueMonitor(QueueMonitor):
         # When using this inside a dashbord it is executed in a multi threaded environment
         # You need to lock the cursor to not get some errors
         self.lock = RLock()
+        self.uri = uri
 
         if cursor is None:
             mongodb_uri = uri.replace('mongo', 'mongodb')
@@ -35,6 +36,12 @@ class MongoQueueMonitor(QueueMonitor):
         self.database = database
         self.db = self.client[self.database]
         self.last_times = []
+
+    def state_dict(self):
+        return {
+            'uri': self.uri,
+            'database': self.database
+        }
 
     def namespaces(self, queue=None):
         with self.lock:

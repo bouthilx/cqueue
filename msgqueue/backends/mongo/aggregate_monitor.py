@@ -1,11 +1,8 @@
 import datetime
 import pymongo
-from bson.objectid import ObjectId
 from threading import RLock
 
 from msgqueue.uri import parse_uri
-from msgqueue.backends.queue import Agent, to_dict
-
 from .util import _parse, _parse_agent
 
 
@@ -34,20 +31,39 @@ class AggregateMonitor:
                 query[name] = value
         return query
 
-    def group_by_substring(self, name, query, field_name, length):
+    def group_by_substring(self, name, query, field_name, group, delimiter=None):
+        projection = {
+            'read': 1,
+            'actioned': 1,
+            'heartbeat': 1,
+            'error': 1,
+            'runtime': {'$subtract': ['$actioned_time', '$read_time']}
+        }
+
+        # We cant use regex because we want to extract the matching group
+        # mongodb regex only matches b
+        if delimiter is None:
+            projection['group']   = {'$substr': ['$namespace', 0, len(group)]}
+            projection['section'] = {'$substr': ['$namespace', len(group), -1]}
+            query['group'] = group
+            grouping = '$section'
+        else:
+            projection['groups'] = {'$split': ['$namespace', delimiter]}
+            projection['g0'] = {'$arrayElemAt': [{'$split': ['$namespace', delimiter]}, 0]}
+            projection['g1'] = {'$arrayElemAt': [{'$split': ['$namespace', delimiter]}, 1]}
+            query['g0'] = group
+            grouping = '$g1'
+
         return self.db[name].aggregate([
-            {'$project': {
-                'sub_namespace': {'$substr': ['$namespace', 0, length]},
-                'read': 1,
-                'actioned': 1,
-                'heartbeat': 1,
-                'error': 1,
-            }},
+            {'$project': projection},
             {'$match': query},
             {'$group': {
-                '_id': '$sub_namespace',
+                '_id': f'{grouping}',
                 field_name: {
                     '$sum': 1
+                },
+                'runtime': {
+                    '$avg': '$runtime'
                 }
             }}
         ])
@@ -133,3 +149,30 @@ class AggregateMonitor:
 
             self.add_filter(query, 'mtype', mtype)
             return groupby(self, name, query, 'actioned')
+
+    def messages(self, queue, group, delimiter=None):
+        projection = {
+            '_id': 1,
+            'time': 1,
+            'read': 1,
+            'mtype': 1,
+            'actioned': 1,
+            'heartbeat': 1,
+            'read_time': 1,
+            'actioned_time': 1,
+            'retry': 1,
+            'error': 1,
+            'message': 1,
+            'replying_to': 1,
+            'g0': {'$arrayElemAt': [{'$split': ['$namespace', delimiter]}, 0]},
+            'g1': {'$arrayElemAt': [{'$split': ['$namespace', delimiter]}, 1]},
+        }
+
+        query = {
+            'g0': group
+        }
+
+        return [_parse(m) for m in self.db[queue].aggregate([
+            {'$project': projection},
+            {'$match': query}
+        ])]

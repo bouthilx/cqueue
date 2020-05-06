@@ -44,6 +44,8 @@ class Message:
     error: str                      # Error if any
     namespace: str = None           # Namespace the message is coming from
     heartbeat: datetime = None      # Last time we had a proof of life
+    g0: str = None
+    g1: str = None
 
     def __repr__(self):
         return f"""Message({self.uid}, {self.time}, {self.mtype}, {self.read}, """ +\
