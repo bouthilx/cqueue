@@ -317,7 +317,7 @@ class CKQueueMonitor(QueueMonitor):
 
             return [_parse_agent(a) for a in self.cursor.fetchall()]
 
-    def lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
+    def lost_messages(self, queue, namespace, timeout_s=120, max_retry=3):
         with self.lock:
             self.cursor.execute(f"""
             SELECT
@@ -338,7 +338,7 @@ class CKQueueMonitor(QueueMonitor):
 
         return msg
 
-    def requeue_lost_messages(self, queue, namespace, timeout_s=60, max_retry=3):
+    def requeue_lost_messages(self, queue, namespace, timeout_s=120, max_retry=3):
         with self.lock:
             constraint = ''
             args = tuple()

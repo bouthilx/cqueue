@@ -207,7 +207,7 @@ class MongoQueueMonitor(QueueMonitor):
             agents = self.db.system.find(query)
             return [_parse_agent(agent) for agent in agents]
 
-    def dead_agents(self, namespace, timeout_s=60):
+    def dead_agents(self, namespace, timeout_s=120):
         agents = self.db.system.find({
             'namespace': namespace,
             'heartbeat': {
@@ -232,7 +232,7 @@ class MongoQueueMonitor(QueueMonitor):
         self.add_filter(query, 'namespace', namespace)
         return query
 
-    def lost_messages(self, queue, namespace, timeout_s=60):
+    def lost_messages(self, queue, namespace, timeout_s=120):
         lost = self.db[queue].find(self._lost_query(namespace, timeout_s))
         return [_parse(msg) for msg in lost]
 

@@ -304,7 +304,7 @@ class QueueMonitor:
         """Hard reset the queue, putting all unactioned messages into an unread state"""
         raise NotImplementedError()
 
-    def lost_messages(self, queue, namespace, timeout_s=60):
+    def lost_messages(self, queue, namespace, timeout_s=120):
         """Return the list of messages that were assigned to worker that died"""
         raise NotImplementedError()
 

@@ -86,18 +86,21 @@ class BaseWorker:
 
         return workitem
 
-    def requeue(self):
+    def requeue(self, queue=None):
+        if queue is None:
+            queue = self.work_queue
+
         namespace = None
         if self.namespaced:
             namespace = self.namespace
 
         requeued = self.client.monitor().requeue_failed_messages(
-            self.work_queue, namespace, max_retry=self.max_retry)
+            queue, namespace, max_retry=self.max_retry)
 
-        info(f'Requeued {requeued} failed messages')
+        info(f'Requeued {requeued} failed messages in {queue}')
 
         self.client.monitor().requeue_lost_messages(
-            self.work_queue, namespace, timeout_s=self.timeout, max_retry=self.max_retry)
+            queue, namespace, timeout_s=self.timeout, max_retry=self.max_retry)
 
     def push_result(self, result, mtype=RESULT_ITEM, replying_to=None):
         uid = None
@@ -107,6 +110,7 @@ class BaseWorker:
             uid = replying_to.uid
             namespace = replying_to.namespace
 
+        self.requeue(self.result_queue)
         return self.client.push(
             self.result_queue,
             namespace,
@@ -147,6 +151,7 @@ class BaseWorker:
                     self.client.mark_actioned(self.work_queue, workitem)
                 except KeyboardInterrupt:
                     info('Task interrupted')
+                    self.client.mark_error(self.work_queue, workitem, 'interrupted by KeyboardInterrupt')
                     self.client.push(self.result_queue, self.namespace, {}, mtype=WORKER_LEFT)
                     raise
                 except Exception:
