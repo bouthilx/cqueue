@@ -1,8 +1,11 @@
 import datetime
+from typing import List
+
 import pymongo
 
+from msgqueue.logs import warning
 from msgqueue.uri import parse_uri
-from msgqueue.backends.queue import Message, MessageQueue, QueuePacemaker
+from msgqueue.backends.queue import Message, MessageQueue, QueuePacemaker, Reply
 
 from .util import _parse
 from .server import new_queue
@@ -174,10 +177,48 @@ class MongoClient(MessageQueue):
             '$set': {
                 'actioned': True,
                 'actioned_time': datetime.datetime.utcnow()}
-            }
+        }
         )
         self._unregister_message(uid)
         return uid
+
+    def _rollback_actioned_all(self, queue, messages):
+        self.db[queue].find_and_modify({
+            '_id': {
+                '$in': list(map(lambda m: m.uid, messages))
+            }}, {
+            '$set': {
+                'actioned': False
+            }
+        })
+
+    def reply(self, queue, namespace, work_messages: dict, work_reply, mtype=None):
+        # TODO: add transaction here if mongo>=4.2
+        try:
+            for mqueue, messages in work_messages.items():
+                self.mark_actioned_all(mqueue, messages)
+
+            self.enqueue(queue, namespace, work_reply, mtype=mtype)
+        except Exception as e:
+            warning(f'Rolling back because of {e}')
+
+            for mqueue, messages in work_messages.items():
+                self._rollback_actioned_all(mqueue, messages)
+
+            raise e
+
+    def mark_actioned_all(self, queue, messages: List[Message]):
+        """See `~mlbaselines.distributed.queue.MessageQueue`"""
+        self.db[queue].find_and_modify({
+            '_id': {
+                '$in': list(map(lambda m: m.uid, messages))
+            }}, {
+            '$set': {
+                'actioned': True,
+                'actioned_time': datetime.datetime.utcnow()}
+            }
+        )
+        self._unregister_message(messages[-1].uid)
 
     def mark_error(self, queue, uid, error):
         if isinstance(uid, Message):

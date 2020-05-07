@@ -1,10 +1,11 @@
 import traceback
 import time
+from dataclasses import dataclass
 from typing import Dict
 
 from msgqueue.logs import error, info, warning
 from msgqueue.backends import new_client
-from msgqueue.backends.queue import MessageQueue, Message
+from msgqueue.backends.queue import MessageQueue, Message, ActionRecord, RecordQueue
 
 WORK_QUEUE = 'work'
 RESULT_QUEUE = 'result'
@@ -145,10 +146,17 @@ class BaseWorker:
                 try:
                     result = handler(workitem, self.context)
 
+                    if isinstance(result, ActionRecord):
+                        ops = RecordQueue(history=result)
+                        ops.mark_actioned(self.work_queue, workitem)
+                        ops.execute(self.client)
+                        continue
+
                     if self.result_queue is not None and result is not None:
                         self.push_result(result, replying_to=workitem)
 
                     self.client.mark_actioned(self.work_queue, workitem)
+
                 except KeyboardInterrupt:
                     info('Task interrupted')
                     self.client.mark_error(self.work_queue, workitem, 'interrupted by KeyboardInterrupt')

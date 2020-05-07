@@ -1,7 +1,10 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 import threading
-from typing import Union, List
+from typing import Union, List, Dict
+from msgqueue.logs import warning
+import signal
+import time
 
 
 def to_dict(a):
@@ -53,6 +56,27 @@ class Message:
 
     def to_dict(self):
         return asdict(self)
+
+
+@dataclass
+class Reply:
+    """Represent a message reply, it means the message should be queued if and only if
+    the previous message was marked as actioned
+
+    This is used when a new work item is the result of a previous work item.
+    In order to make sure that no race condition happen, we need to mark
+    all the messages related to the new work item as actioned and push the new work item in a way that is
+    atomic.
+    """
+    # New work item to be pushed
+    reply: str
+
+    # Messages that where used to create the new work item
+    # Queue: List[Message] to be marked as actioned
+    messages: Dict[str, List[Message]] = field(default_factory=dict)
+
+    def add_dependant(self, queue, message):
+        self.messages[queue] = message
 
 
 class _Buffer:
@@ -231,6 +255,22 @@ class MessageQueue:
         """
         raise NotImplementedError()
 
+    def reply(self, queue, namespace, work_message: dict, work_reply, mtype=None):
+        """Mark a message as actioned and push a new work item
+
+        Notes
+        -----
+        This function is used when when create a task that insert new jobs.
+        You want the task to be completed only if the new jobs are inserted.
+
+        This is used to prevent a race condition if the job is killed before it can be marked as completed and
+        the new jobs are inserted
+        """
+        raise NotImplementedError()
+
+    def mark_actioned_all(self, queue, messages: List[Message]):
+        raise NotImplementedError()
+
     def mark_error(self, queue, message, error):
         raise NotImplementedError()
 
@@ -375,4 +415,80 @@ class QueueMonitor:
 
         print('Archiving is done')
         return None
+
+
+class Protected(object):
+    def __init__(self):
+        self.signal_received = None
+        self.handlers = dict()
+        self.start = 0
+
+    def __enter__(self):
+        self.signal_received = False
+        self.start = time.time()
+        self.handlers[signal.SIGINT] = signal.signal(signal.SIGINT, self.handler)
+        self.handlers[signal.SIGTERM] = signal.signal(signal.SIGTERM, self.handler)
+
+    def handler(self, sig, frame):
+        warning(f'Delaying signal to finish operations')
+        self.signal_received = (sig, frame)
+
+    def __exit__(self, type, value, traceback):
+        signal.signal(signal.SIGINT, self.handlers[signal.SIGINT])
+        signal.signal(signal.SIGTERM, self.handlers[signal.SIGTERM])
+
+        if self.signal_received:
+            warning(f'Termination was delayed by {time.time() - self.start:.4f} s')
+            self.handlers[self.signal_received[0]](*self.signal_received)
+
+
+class ActionRecord:
+    def __init__(self, records):
+        self.records = records
+
+
+class RecordQueue:
+    """Record all the operation that are being done do the queue and execute them in one shot
+
+    This is done to increase atomicity, will this does not guarantee it,
+    it groups operation that should be done together closer.
+
+    If the database backend supports transaction then it can be done in a way that is atomic and safe.
+    """
+    def __init__(self, history=None):
+        if history is None:
+            history = []
+
+        if isinstance(history, ActionRecord):
+            history = history.records
+
+        self.history = history
+
+    def _call_logger(self, name):
+        def fake_call(*args, **kwargs):
+            self.history.append((name, args, kwargs))
+
+        return fake_call
+
+    def __getattr__(self, item):
+        return self._call_logger(item)
+
+    def execute(self, client):
+        from threading import Thread
+
+        def run():
+            for name, args, kwargs in self.history:
+                getattr(client, name)(*args, **kwargs)
+
+        # According to
+        # https://stackoverflow.com/questions/842557/how-to-prevent-a-block-of-code-from-being-interrupted-by-keyboardinterrupt-in-py
+        # it helps if the executing is inside a thread
+        with Protected():
+            t = Thread(target=run)
+            t.start()
+            t.join()
+        return
+
+    def records(self):
+        return ActionRecord(self.history)
 
