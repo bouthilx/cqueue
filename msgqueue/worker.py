@@ -75,7 +75,9 @@ class BaseWorker:
             namespace = self.namespace
 
         while workitem is None:
-            workitem = self.client.pop(self.work_queue, namespace)
+            workitem = self.client.pop(
+                self.work_queue, namespace,
+                mtype=list(self.dispatcher.keys()))
 
             if workitem is None:
                 time.sleep(0.01)
