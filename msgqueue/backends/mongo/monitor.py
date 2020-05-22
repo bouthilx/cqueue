@@ -81,7 +81,7 @@ class MongoQueueMonitor(QueueMonitor):
             self.add_time_filter(query, 'time', time)
 
             results = [_parse(msg) for msg in self.db[name].find(query, sort=[
-                ('time', pymongo.ASCENDING),
+                ('_id', pymongo.ASCENDING),
             ])]
 
             return results
